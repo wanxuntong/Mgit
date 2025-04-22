@@ -1,0 +1,6 @@
+PyQt5>=5.15.0
+PyQt-Fluent-Widgets>=1.2.0
+GitPython>=3.1.0
+markdown>=3.3.0
+pygments>=2.7.0
+pyqtwebengine>=5.15.0 
