@@ -5,8 +5,13 @@ import os
 import json
 from pathlib import Path
 import requests
+import base64
+from datetime import datetime
 from PyQt5.QtCore import QObject, pyqtSignal
 import urllib3
+
+# 导入日志工具
+from src.utils.logger import info, warning, error, debug
 
 # 禁用SSL证书验证警告
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -468,7 +473,7 @@ class AccountManager(QObject):
             dict or False: 如果创建成功，返回仓库信息，否则返回False
         """
         try:
-            print(f"尝试为用户 {username} 创建GitHub仓库: {repo_name}")
+            debug(f"尝试为用户 {username} 创建GitHub仓库: {repo_name}")
             if PYGITHUB_AVAILABLE:
                 # 使用PyGithub创建仓库
                 auth = Auth.Token(token)
@@ -478,18 +483,18 @@ class AccountManager(QObject):
                 # 验证用户身份
                 authenticated_username = user.login
                 if authenticated_username != username:
-                    print(f"警告：授权用户 ({authenticated_username}) 与请求的用户 ({username}) 不匹配")
+                    warning(f"警告：授权用户 ({authenticated_username}) 与请求的用户 ({username}) 不匹配")
                 
-                # 创建仓库
+                # 创建仓库，不进行自动初始化
                 repo = user.create_repo(
                     name=repo_name,
                     description=description,
                     private=private,
-                    auto_init=True
+                    auto_init=False  # 不自动初始化，改为在本地初始化后推送
                 )
                 
                 # 打印仓库URL以便调试
-                print(f"GitHub仓库创建成功: {repo.clone_url}")
+                debug(f"GitHub仓库创建成功: {repo.clone_url}")
                 
                 # 转换为字典
                 result = {
@@ -511,7 +516,7 @@ class AccountManager(QObject):
                     "name": repo_name,
                     "description": description,
                     "private": private,
-                    "auto_init": True  # 自动初始化仓库（创建README）
+                    "auto_init": False  # 不自动初始化，改为在本地初始化后推送
                 }
                 
                 # 发送创建仓库请求
@@ -523,12 +528,13 @@ class AccountManager(QObject):
                 )
                 
                 if response.status_code in [201, 200]:  # 创建成功
+                    info(f"使用REST API创建GitHub仓库成功: {repo_name}")
                     return response.json()
                 else:
-                    print(f"创建GitHub仓库失败: {response.status_code} - {response.text}")
+                    error(f"创建GitHub仓库失败: {response.status_code} - {response.text}")
                     return False
         except Exception as e:
-            print(f"创建GitHub仓库时发生错误: {str(e)}")
+            error(f"创建GitHub仓库时发生错误: {str(e)}")
             return False
             
     def create_gitlab_repository(self, url, token, repo_name, description="", visibility="public"):
@@ -552,7 +558,7 @@ class AccountManager(QObject):
                 "name": repo_name,
                 "description": description,
                 "visibility": visibility,
-                "initialize_with_readme": True  # 自动初始化仓库（创建README）
+                "initialize_with_readme": False  # 不自动初始化，改为在本地初始化后推送
             }
             
             # 发送创建仓库请求
@@ -564,10 +570,11 @@ class AccountManager(QObject):
             )
             
             if response.status_code in [201, 200]:  # 创建成功
+                info(f"创建GitLab仓库成功: {repo_name}")
                 return response.json()
             else:
-                print(f"创建GitLab仓库失败: {response.status_code} - {response.text}")
+                error(f"创建GitLab仓库失败: {response.status_code} - {response.text}")
                 return False
         except Exception as e:
-            print(f"创建GitLab仓库时发生错误: {str(e)}")
+            error(f"创建GitLab仓库时发生错误: {str(e)}")
             return False 

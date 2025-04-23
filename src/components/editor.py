@@ -165,6 +165,12 @@ class EnhancedTextEdit(QPlainTextEdit):
         self.setLineWrapMode(QPlainTextEdit.WidgetWidth)
         self.setTabChangesFocus(False)
         
+    def focusOutEvent(self, event):
+        """当编辑器失去焦点时自动保存文件"""
+        # 不在该方法中处理保存逻辑
+        # 因为所有的FocusOut事件已经由父级MarkdownEditor的eventFilter处理
+        super().focusOutEvent(event)
+        
     def keyPressEvent(self, event):
         """ 处理键盘事件，提供智能输入 """
         # Tab键自动缩进
@@ -511,10 +517,11 @@ class MarkdownEditor(QWidget):
     documentChanged = pyqtSignal(str)  # 文档内容变化信号
     cursorPositionChanged = pyqtSignal(int)  # 光标位置变化信号
     
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, config_manager=None):
         super().__init__(parent)
         self.dark_mode = False  # 默认使用浅色模式
         self.currentFilePath = None  # 当前文件路径
+        self.config_manager = config_manager  # 配置管理器
         self.initUI()
         self.connectSignals()
         self.setupAutoSave()
@@ -566,13 +573,51 @@ class MarkdownEditor(QWidget):
                 rect = self.editor.contentsRect()
                 self.lineNumberArea.setGeometry(QRect(rect.left(), rect.top(), 
                                                 self.lineNumberArea.width(), rect.height()))
+            elif event.type() == QEvent.FocusOut:
+                # 打印调试信息
+                print(f"FocusOut event detected! currentFilePath: {self.currentFilePath}")
+                print(f"Document modified: {self.editor.document().isModified()}")
+                print(f"autoSaveOnFocusChange: {self.autoSaveOnFocusChange}")
+                
+                # 获取主窗口中的当前文件路径（如果存在）
+                parent = self.parent()
+                current_path = self.currentFilePath
+                while parent and not current_path:
+                    if hasattr(parent, 'statusBar') and hasattr(parent.statusBar, 'getCurrentFile'):
+                        status_file = parent.statusBar.getCurrentFile()
+                        if status_file:
+                            current_path = status_file
+                            # 更新currentFilePath为状态栏中的路径
+                            self.currentFilePath = current_path
+                            print(f"Updated currentFilePath from statusBar: {current_path}")
+                            break
+                    parent = parent.parent()
+                
+                # 在编辑器失去焦点且文档被修改时保存文件
+                if self.autoSaveOnFocusChange and self.editor.document().isModified():
+                    print("Attempting to save file...")
+                    # 如果没有当前文件路径但有修改，执行非交互式保存
+                    if not self.currentFilePath:
+                        print("No currentFilePath, using non-interactive save")
+                        self.saveAsFile(noninteractive=True)
+                    else:
+                        print(f"Saving to {self.currentFilePath}")
+                        self.saveFile()
                 
         return super().eventFilter(obj, event)
         
     def setupAutoSave(self):
         """ 设置自动保存功能 """
-        self.autoSaveEnabled = True  # 是否启用自动保存
-        self.autoSaveInterval = 60000  # 自动保存间隔（毫秒）
+        # 获取自动保存配置
+        if self.config_manager:
+            self.autoSaveOnFocusChange = self.config_manager.get_auto_save_on_focus_change()
+            interval_seconds = self.config_manager.get_auto_save_interval()
+            self.autoSaveInterval = interval_seconds * 1000  # 转换为毫秒
+        else:
+            self.autoSaveOnFocusChange = True  # 默认启用
+            self.autoSaveInterval = 60000  # 默认60秒
+            
+        self.autoSaveEnabled = True  # 是否启用定时自动保存
         
         # 创建自动保存定时器
         self.autoSaveTimer = QTimer(self)
@@ -581,8 +626,26 @@ class MarkdownEditor(QWidget):
         # 设置自动保存路径
         self.autoSavePath = os.path.join(tempfile.gettempdir(), "mgit_autosave.md")
         
+        # 如果配置管理器存在，则连接信号
+        if self.config_manager:
+            self.config_manager.editorConfigChanged.connect(self.updateAutoSaveConfig)
+        
         # 启动自动保存
         self.autoSaveTimer.start(self.autoSaveInterval)
+        
+    def updateAutoSaveConfig(self):
+        """更新自动保存配置"""
+        if not self.config_manager:
+            return
+            
+        # 更新配置
+        self.autoSaveOnFocusChange = self.config_manager.get_auto_save_on_focus_change()
+        interval_seconds = self.config_manager.get_auto_save_interval()
+        self.autoSaveInterval = interval_seconds * 1000  # 转换为毫秒
+        
+        # 更新定时器
+        if self.autoSaveEnabled:
+            self.autoSaveTimer.setInterval(self.autoSaveInterval)
         
     def performAutoSave(self):
         """ 执行自动保存 """
@@ -715,46 +778,50 @@ class MarkdownEditor(QWidget):
         """ 设置工具栏 """
         self.toolbar.setIconSize(QSize(16, 16))
         
-        # 标题下拉菜单
-        self.headingCombo = ComboBox()
-        self.headingCombo.addItem("标题", None)
-        self.headingCombo.addItem("标题 1", "# ")
-        self.headingCombo.addItem("标题 2", "## ")
-        self.headingCombo.addItem("标题 3", "### ")
-        self.headingCombo.addItem("标题 4", "#### ")
-        self.headingCombo.addItem("标题 5", "##### ")
-        self.headingCombo.addItem("标题 6", "###### ")
-        self.headingCombo.setFixedWidth(100)
-        
-        # 连接信号
+        # 添加标题下拉菜单
+        self.headingCombo = ComboBox(self)
+        self.headingCombo.addItems(["普通文本", "标题1", "标题2", "标题3", "标题4", "标题5", "标题6"])
+        self.headingCombo.setCurrentIndex(0)
         self.headingCombo.currentIndexChanged.connect(self.onHeadingSelected)
+        self.headingCombo.setToolTip("设置标题级别")
         self.toolbar.addWidget(self.headingCombo)
         
         # 添加分隔符
         self.toolbar.addSeparator()
         
-        # 常用格式按钮
+        # 添加粗体按钮
         self.boldAction = self.addToolButton(FluentIcon.FONT_SIZE, "粗体 (Ctrl+B)", lambda: self.insertMarkup("**", "**"))
+        
+        # 添加斜体按钮
         self.italicAction = self.addToolButton(FluentIcon.FONT, "斜体 (Ctrl+I)", lambda: self.insertMarkup("*", "*"))
+        
+        # 添加链接按钮
+        self.linkAction = self.addToolButton(FluentIcon.LINK, "链接 (Ctrl+K)", lambda: self.insertMarkup("[链接文本](", ")"))
+        
+        # 添加代码按钮
         self.codeAction = self.addToolButton(FluentIcon.CODE, "代码 (Ctrl+`)", lambda: self.insertMarkup("`", "`"))
         
         # 添加分隔符
         self.toolbar.addSeparator()
         
-        # 列表按钮
-        self.bulletListAction = self.addToolButton(FluentIcon.CHECKBOX, "项目符号列表", lambda: self.insertMarkup("- ", ""))
-        self.numberedListAction = self.addToolButton(FluentIcon.ADD, "编号列表", lambda: self.insertMarkup("1. ", ""))
+        # 添加列表按钮
+        self.listAction = self.addToolButton(FluentIcon.CHECKBOX, "无序列表", lambda: self.insertMarkup("- ", ""))
+        self.numberListAction = self.addToolButton(FluentIcon.ADD, "有序列表", lambda: self.insertMarkup("1. ", ""))
         self.taskListAction = self.addToolButton(FluentIcon.COMPLETED, "任务列表", lambda: self.insertMarkup("- [ ] ", ""))
         
         # 添加分隔符
         self.toolbar.addSeparator()
         
-        # 其他常用元素
-        self.linkAction = self.addToolButton(FluentIcon.LINK, "链接 (Ctrl+K)", lambda: self.insertMarkup("[链接文本](", ")"))
         self.imageAction = self.addToolButton(FluentIcon.CAMERA, "图片", lambda: self.insertMarkup("![图片描述](", ")"))
         self.quoteAction = self.addToolButton(FluentIcon.CHAT, "引用", lambda: self.insertMarkup("> ", ""))
         self.hlineAction = self.addToolButton(FluentIcon.REMOVE, "水平线", lambda: self.insertPlainText("\n---\n"))
         self.tableAction = self.addToolButton(FluentIcon.VIEW, "表格", self.insertTable)
+        
+        # 添加分隔符
+        self.toolbar.addSeparator()
+        
+        # 移除保存按钮
+        # self.saveAction = self.addToolButton(FluentIcon.SAVE, "保存文档 (Ctrl+S)", self.saveFile)
         
     def addToolButton(self, icon, tooltip, slot):
         """ 添加工具栏按钮 """
@@ -849,34 +916,100 @@ class MarkdownEditor(QWidget):
         """ 保存文件 """
         # 如果没有当前文件路径，执行另存为操作
         if not self.currentFilePath:
-            return self.saveAsFile()
+            print("No currentFilePath in saveFile, redirecting to saveAsFile")
+            
+            # 尝试从父窗口获取当前文件路径
+            parent = self.parent()
+            while parent:
+                if hasattr(parent, 'statusBar') and hasattr(parent.statusBar, 'getCurrentFile'):
+                    status_file = parent.statusBar.getCurrentFile()
+                    if status_file:
+                        print(f"Retrieved file path from statusBar: {status_file}")
+                        self.currentFilePath = status_file
+                        break
+                parent = parent.parent()
+                
+            # 如果还是没有路径，执行另存为
+            if not self.currentFilePath:
+                return self.saveAsFile()
             
         try:
             # 获取编辑器内容
             text = self.editor.toPlainText()
             
             # 写入文件
+            print(f"Writing to file: {self.currentFilePath}")
             with open(self.currentFilePath, 'w', encoding='utf-8') as f:
                 f.write(text)
                 
             # 清除修改标记
             self.editor.document().setModified(False)
+            print("File saved successfully, document marked as unmodified")
+            
+            # 通知状态栏（如果有父窗口）
+            parent = self.parent()
+            while parent:
+                if hasattr(parent, 'statusBar') and hasattr(parent.statusBar, 'setCurrentFile'):
+                    parent.statusBar.setCurrentFile(self.currentFilePath)
+                    print(f"Updated statusBar with currentFilePath: {self.currentFilePath}")
+                    break
+                parent = parent.parent()
             
             return True
         except Exception as e:
+            import traceback
+            print(f"Save failed: {str(e)}")
+            print(traceback.format_exc())
             QMessageBox.critical(self, "保存失败", f"保存文件时发生错误: {str(e)}")
             return False
     
-    def saveAsFile(self):
-        """ 另存为 """
+    def saveAsFile(self, noninteractive=False):
+        """ 另存为 
+        Args:
+            noninteractive: 是否在自动保存模式下不显示对话框
+        """
         options = QFileDialog.Options()
-        filePath, _ = QFileDialog.getSaveFileName(
-            self, "另存为", self.currentFilePath or "",
-            "Markdown文件 (*.md);;所有文件 (*)", options=options
-        )
+        
+        # 优先检查是否已有当前文件路径
+        # 如果是自动保存模式且有当前文件路径，直接使用该路径
+        if noninteractive and self.currentFilePath:
+            print(f"Non-interactive save with existing path: {self.currentFilePath}")
+            return self.saveFile()
+        
+        # 如果是自动保存模式且没有文件路径，则使用临时文件
+        if noninteractive and not self.currentFilePath:
+            print("Non-interactive save requested without path")
+            
+            # 尝试从父窗口获取当前文件路径
+            parent = self.parent()
+            while parent:
+                if hasattr(parent, 'statusBar') and hasattr(parent.statusBar, 'getCurrentFile'):
+                    status_file = parent.statusBar.getCurrentFile()
+                    if status_file:
+                        self.currentFilePath = status_file
+                        print(f"Using path from statusBar: {self.currentFilePath}")
+                        return self.saveFile()
+                parent = parent.parent()
+            
+            # 如果依然没有路径，使用临时文件
+            import tempfile
+            import os
+            
+            # 使用临时目录中的一个固定文件
+            save_dir = tempfile.gettempdir()
+            filename = "mgit_autosaved_document.md"
+            filePath = os.path.join(save_dir, filename)
+            print(f"Auto-saving to temp location: {filePath}")
+        else:
+            # 显示文件保存对话框
+            filePath, _ = QFileDialog.getSaveFileName(
+                self, "另存为", self.currentFilePath or "",
+                "Markdown文件 (*.md);;所有文件 (*)", options=options
+            )
         
         if not filePath:
-            return False  # 用户取消
+            print("No file path selected or generated")
+            return False  # 用户取消或无法生成路径
             
         # 确保文件有.md扩展名
         if not filePath.lower().endswith('.md'):
@@ -884,6 +1017,7 @@ class MarkdownEditor(QWidget):
             
         # 保存当前文件路径
         self.currentFilePath = filePath
+        print(f"currentFilePath set to: {self.currentFilePath}")
         
         # 调用保存方法
         return self.saveFile() 

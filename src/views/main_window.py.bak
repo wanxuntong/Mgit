@@ -100,8 +100,8 @@ class MainWindow(QMainWindow):
         # 创建中间编辑器和预览区分割器
         self.editorSplitter = QSplitter(Qt.Horizontal)
         
-        # 创建Markdown编辑器（传入配置管理器）
-        self.editor = MarkdownEditor(self, config_manager=self.configManager)
+        # 创建Markdown编辑器
+        self.editor = MarkdownEditor(self)
         
         # 创建Markdown预览面板
         self.preview = MarkdownPreview(self)
@@ -112,7 +112,7 @@ class MainWindow(QMainWindow):
         # 添加组件到分割器
         self.editorSplitter.addWidget(self.editor)
         self.editorSplitter.addWidget(self.preview)
-        self.editorSplitter.setSizes([500, 500])
+        self.editorSplitter.setSizes([600, 600])
         
         # 添加组件到主分割器
         self.mainSplitter.addWidget(leftPanel)
@@ -232,51 +232,29 @@ class MainWindow(QMainWindow):
         # 更新最近仓库列表
         self.updateRecentRepositoriesMenu()
         
-        # 设置菜单
-        settingsMenu = menuBar.addMenu("设置")
+        # 视图菜单
+        viewMenu = menuBar.addMenu("视图")
         
-        # 主题设置子菜单
+        # 设置主题子菜单
         themeMenu = QMenu("主题", self)
+        themeMenu.setIcon(FluentIcon.BRUSH.icon())
         
-        # 添加三种主题选项
+        # 浅色主题
         lightThemeAction = QAction("浅色", self)
         lightThemeAction.triggered.connect(lambda: self.setTheme('light'))
         themeMenu.addAction(lightThemeAction)
         
+        # 深色主题
         darkThemeAction = QAction("深色", self)
         darkThemeAction.triggered.connect(lambda: self.setTheme('dark'))
         themeMenu.addAction(darkThemeAction)
         
+        # 自动主题
         autoThemeAction = QAction("自动", self)
         autoThemeAction.triggered.connect(lambda: self.setTheme('auto'))
         themeMenu.addAction(autoThemeAction)
         
-        # 将主题子菜单添加到设置菜单
-        settingsMenu.addMenu(themeMenu)
-        
-        # 添加自动保存设置子菜单
-        autoSaveMenu = QMenu("自动保存", self)
-        
-        # 失去焦点时自动保存选项
-        self.autoSaveOnFocusAction = QAction("失去焦点时自动保存", self)
-        self.autoSaveOnFocusAction.setCheckable(True)
-        self.autoSaveOnFocusAction.setChecked(self.configManager.get_auto_save_on_focus_change())
-        self.autoSaveOnFocusAction.triggered.connect(self.toggleAutoSaveOnFocus)
-        autoSaveMenu.addAction(self.autoSaveOnFocusAction)
-        
-        # 自动保存间隔选项
-        autoSaveIntervalMenu = QMenu("自动保存间隔", self)
-        
-        # 添加不同的时间间隔选项
-        for seconds in [5, 10, 30, 60, 120, 300]:
-            intervalAction = QAction(f"{seconds}秒", self)
-            intervalAction.triggered.connect(lambda checked, s=seconds: self.setAutoSaveInterval(s))
-            autoSaveIntervalMenu.addAction(intervalAction)
-            
-        autoSaveMenu.addMenu(autoSaveIntervalMenu)
-        
-        # 将自动保存子菜单添加到设置菜单
-        settingsMenu.addMenu(autoSaveMenu)
+        viewMenu.addMenu(themeMenu)
         
         # 工具菜单
         toolsMenu = menuBar.addMenu("工具")
@@ -436,22 +414,18 @@ class MainWindow(QMainWindow):
         
         # 如果没有当前文件，执行另存为操作
         if not currentFile:
-            print("MainWindow.saveFile: No current file, trying saveFileAs")
             return self.saveFileAs()
             
         try:
             # 设置编辑器当前文件路径
-            print(f"MainWindow.saveFile: Setting editor.currentFilePath to {currentFile}")
             self.editor.currentFilePath = currentFile
             
             # 使用编辑器的保存方法
-            print("MainWindow.saveFile: Calling editor.saveFile()")
             success = self.editor.saveFile()
             
             if success:
                 # 更新状态栏
                 self.statusBar.setCurrentFile(currentFile)
-                print(f"MainWindow.saveFile: Updated statusBar with {currentFile}")
                 
                 # 显示成功消息
                 InfoBar.success(
@@ -466,9 +440,6 @@ class MainWindow(QMainWindow):
             
             return success
         except Exception as e:
-            import traceback
-            print(f"MainWindow.saveFile failed: {str(e)}")
-            print(traceback.format_exc())
             show_error_message(self, "保存失败", "保存文件时发生错误", e)
             return False
             
@@ -478,27 +449,22 @@ class MainWindow(QMainWindow):
             bool: 是否成功保存
         """
         currentFile = self.statusBar.getCurrentFile()
-        print(f"MainWindow.saveFileAs: Current file is {currentFile}")
         
         # 设置起始目录
         if currentFile:
             self.editor.currentFilePath = currentFile
-            print(f"MainWindow.saveFileAs: Set editor.currentFilePath to {currentFile}")
         
         # 使用编辑器的另存为方法
-        print("MainWindow.saveFileAs: Calling editor.saveAsFile()")
         success = self.editor.saveAsFile()
         
         if success and self.editor.currentFilePath:
             # 更新状态栏
-            newPath = self.editor.currentFilePath
-            self.statusBar.setCurrentFile(newPath)
-            print(f"MainWindow.saveFileAs: Updated statusBar with new path: {newPath}")
+            self.statusBar.setCurrentFile(self.editor.currentFilePath)
             
             # 显示成功消息
             InfoBar.success(
                 title="保存成功",
-                content=f"文件已保存: {os.path.basename(newPath)}",
+                content=f"文件已保存: {os.path.basename(self.editor.currentFilePath)}",
                 orient=Qt.Horizontal,
                 isClosable=True,
                 position=InfoBarPosition.TOP,
@@ -590,12 +556,7 @@ class MainWindow(QMainWindow):
             with open(filePath, 'r', encoding='utf-8') as f:
                 content = f.read()
                 self.editor.setPlainText(content)
-                # 同时更新状态栏和编辑器组件的文件路径
                 self.statusBar.setCurrentFile(filePath)
-                self.editor.currentFilePath = filePath
-                print(f"File loaded, path set to: {filePath}")
-                # 重置修改标记
-                self.editor.editor.document().setModified(False)
         except Exception as e:
             QMessageBox.critical(self, "错误", f"无法打开文件: {str(e)}")
             
@@ -1231,11 +1192,3 @@ class MainWindow(QMainWindow):
         """ 显示日志管理对话框 """
         dialog = LogDialog(self)
         dialog.exec_() 
-
-    def toggleAutoSaveOnFocus(self):
-        """ 切换自动保存到焦点变化 """
-        self.configManager.set_auto_save_on_focus_change(self.autoSaveOnFocusAction.isChecked())
-
-    def setAutoSaveInterval(self, seconds):
-        """ 设置自动保存间隔 """
-        self.configManager.set_auto_save_interval(seconds) 

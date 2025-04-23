@@ -11,6 +11,8 @@ class ConfigManager(QObject):
     
     # 定义信号，当最近仓库列表更新时触发
     recentRepositoriesChanged = pyqtSignal()
+    # 定义信号，当编辑器配置更新时触发
+    editorConfigChanged = pyqtSignal()
     
     def __init__(self, config_file=None):
         """ 初始化配置管理器 
@@ -36,7 +38,11 @@ class ConfigManager(QObject):
         self.config = {
             'recent_repositories': [],
             'theme': 'auto',
-            'max_recent_count': 10
+            'max_recent_count': 10,
+            'editor': {
+                'auto_save_on_focus_change': True,  # 焦点变化时自动保存
+                'auto_save_interval': 60  # 自动保存间隔（秒）
+            }
         }
         
         # 加载配置
@@ -131,4 +137,44 @@ class ConfigManager(QObject):
         Returns:
             str: 主题名称
         """
-        return self.config['theme'] 
+        return self.config['theme']
+
+    def set_auto_save_on_focus_change(self, enabled):
+        """设置失去焦点时是否自动保存
+        Args:
+            enabled: 是否启用
+        """
+        if 'editor' not in self.config:
+            self.config['editor'] = {}
+        self.config['editor']['auto_save_on_focus_change'] = enabled
+        self.save_config()
+        self.editorConfigChanged.emit()
+        
+    def get_auto_save_on_focus_change(self):
+        """获取失去焦点时是否自动保存
+        Returns:
+            bool: 是否启用
+        """
+        if 'editor' not in self.config or 'auto_save_on_focus_change' not in self.config['editor']:
+            return True  # 默认启用
+        return self.config['editor']['auto_save_on_focus_change']
+        
+    def set_auto_save_interval(self, seconds):
+        """设置自动保存间隔
+        Args:
+            seconds: 间隔秒数
+        """
+        if 'editor' not in self.config:
+            self.config['editor'] = {}
+        self.config['editor']['auto_save_interval'] = max(5, seconds)  # 最小5秒
+        self.save_config()
+        self.editorConfigChanged.emit()
+        
+    def get_auto_save_interval(self):
+        """获取自动保存间隔
+        Returns:
+            int: 间隔秒数
+        """
+        if 'editor' not in self.config or 'auto_save_interval' not in self.config['editor']:
+            return 60  # 默认60秒
+        return self.config['editor']['auto_save_interval'] 

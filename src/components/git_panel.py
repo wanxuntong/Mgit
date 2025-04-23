@@ -2,11 +2,14 @@
 # -*- coding: utf-8 -*-
 
 import os
+import sys
+import git
+from pathlib import Path
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QLabel, QListWidget, QListWidgetItem,
                            QCheckBox, QHBoxLayout, QPushButton, QInputDialog, QMessageBox,
-                           QFileDialog, QComboBox, QToolBar, QAction, QSizePolicy, QMenu, QDialog)
+                           QFileDialog, QComboBox, QToolBar, QAction, QSizePolicy, QMenu, QDialog, QSplitter)
 from PyQt5.QtCore import Qt, pyqtSignal, pyqtSlot
-from PyQt5.QtGui import QIcon, QCursor
+from PyQt5.QtGui import QIcon, QCursor, QFont
 from qfluentwidgets import (LineEdit, PrimaryToolButton, FluentIcon, TitleLabel, 
                           PrimaryPushButton, InfoBar, InfoBarPosition, ComboBox,
                           CardWidget, ToolButton, TransparentToolButton, ToolTipFilter,
@@ -14,6 +17,9 @@ from qfluentwidgets import (LineEdit, PrimaryToolButton, FluentIcon, TitleLabel,
 from src.utils.git_manager import GitManager
 from src.utils.config_manager import ConfigManager
 from src.utils.account_manager import AccountManager
+from src.utils.logger import info, warning, error, debug
+from src.utils.git_thread import GitThread
+from src.components.loading_mask import LoadingMask
 
 class GitPanel(QWidget):
     """ Git面板组件 """
@@ -25,9 +31,21 @@ class GitPanel(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.gitManager = None
+        self.currentPath = ""
         self.configManager = ConfigManager()
         self.recentReposList = []
+        
+        # 创建Git线程
+        self.gitThread = GitThread(self)
+        self.gitThread.operationStarted.connect(self.onGitOperationStarted)
+        self.gitThread.operationFinished.connect(self.onGitOperationFinished)
+        self.gitThread.progressUpdate.connect(self.onGitProgressUpdate)
+        
+        # 初始化UI
         self.initUI()
+        
+        # 创建加载遮罩 - 在UI初始化之后创建，确保正确的父子关系和Z顺序
+        self.loadingMask = LoadingMask(self)
         
         # 初始加载最近仓库列表
         self.updateRecentRepositories()
@@ -36,7 +54,6 @@ class GitPanel(QWidget):
         self.commitBtn.setEnabled(False)
         self.pushBtn.setEnabled(False)
         self.pullBtn.setEnabled(False)
-        self.fetchBtn.setEnabled(False)
         self.stashBtn.setEnabled(False)
         self.branchBtn.setEnabled(False)
         self.remoteBtn.setEnabled(False)
@@ -207,12 +224,6 @@ class GitPanel(QWidget):
         # 协作操作按钮布局
         collabBtnLayout = QHBoxLayout()
         
-        # 抓取按钮
-        self.fetchBtn = PrimaryPushButton("抓取")
-        self.fetchBtn.setIcon(FluentIcon.SYNC.icon())
-        self.fetchBtn.clicked.connect(self.fetchChanges)
-        collabBtnLayout.addWidget(self.fetchBtn)
-        
         # 存储按钮
         self.stashBtn = PrimaryPushButton("存储")
         self.stashBtn.setIcon(FluentIcon.SAVE.icon())
@@ -340,7 +351,6 @@ class GitPanel(QWidget):
                 # 只有当存在远程仓库时才启用的按钮
                 self.pushBtn.setEnabled(has_remotes)
                 self.pullBtn.setEnabled(has_remotes)
-                self.fetchBtn.setEnabled(has_remotes)
                 self.syncBtn.setEnabled(has_remotes)
                 
                 # 如果没有远程仓库，显示提示信息
@@ -365,7 +375,6 @@ class GitPanel(QWidget):
                 self.commitBtn.setEnabled(False)
                 self.pushBtn.setEnabled(False)
                 self.pullBtn.setEnabled(False)
-                self.fetchBtn.setEnabled(False)
                 self.stashBtn.setEnabled(False)
                 self.branchBtn.setEnabled(False)
                 self.remoteBtn.setEnabled(False)
@@ -387,7 +396,6 @@ class GitPanel(QWidget):
             self.commitBtn.setEnabled(False)
             self.pushBtn.setEnabled(False)
             self.pullBtn.setEnabled(False)
-            self.fetchBtn.setEnabled(False)
             self.stashBtn.setEnabled(False)
             self.branchBtn.setEnabled(False)
             self.remoteBtn.setEnabled(False)
@@ -435,29 +443,38 @@ class GitPanel(QWidget):
         ) == QMessageBox.Yes
         
         try:
-            # 初始化本地仓库
-            local_repo = GitManager.initRepository(fullRepoPath)
+            # 初始化本地仓库（使用静态方法，需要创建临时GitManager）
+            temp_manager = GitManager(os.path.dirname(fullRepoPath))
             
-            # 如果需要创建远程仓库
-            if createRemote:
-                self.createRemoteRepository(local_repo, fullRepoPath, repoName)
-            
-            # 设置为当前仓库
-            self.setRepository(fullRepoPath)
-            
-            # 发出信号通知其他组件
-            self.repositoryInitialized.emit(fullRepoPath)
-            
-            InfoBar.success(
-                title="创建成功",
-                content=f"已成功创建并初始化Git仓库: {repoName}" +
-                        ("，并在远程创建了关联仓库" if createRemote else ""),
-                orient=Qt.Horizontal,
-                isClosable=True,
-                position=InfoBarPosition.TOP,
-                duration=3000,
-                parent=self
+            # 使用Git线程执行初始化操作
+            self.gitThread.setup(
+                operation='init',
+                git_manager=temp_manager,
+                path=fullRepoPath,
+                initial_branch="main"
             )
+            self.gitThread.start()
+            
+            # 这个方法会在Git操作完成后在onGitOperationFinished中调用
+            def on_init_finished(success, op, msg):
+                if success:
+                    # 初始化成功，创建远程仓库（如果需要）
+                    local_repo = git.Repo(fullRepoPath)
+                    if createRemote:
+                        self.createRemoteRepository(local_repo, fullRepoPath, repoName)
+                    
+                    # 设置为当前仓库
+                    self.setRepository(fullRepoPath)
+                    
+                    # 发出信号通知其他组件
+                    self.repositoryInitialized.emit(fullRepoPath)
+                
+                # 移除临时连接
+                self.gitThread.operationFinished.disconnect(on_init_finished)
+            
+            # 临时连接，只处理一次初始化完成的回调
+            self.gitThread.operationFinished.connect(on_init_finished)
+            
         except Exception as e:
             QMessageBox.critical(self, "错误", f"初始化仓库失败: {str(e)}")
 
@@ -579,6 +596,7 @@ class GitPanel(QWidget):
         account = selected["account"]
         
         try:
+            remote_url = None
             if platform == "github":
                 # 创建GitHub远程仓库
                 result = account_manager.create_github_repository(
@@ -590,35 +608,13 @@ class GitPanel(QWidget):
                 )
                 
                 if result:
-                    # 获取远程仓库URL
-                    clone_url = result["clone_url"]
-                    # 确保URL格式正确（去除末尾斜杠）
-                    if clone_url.endswith('/'):
-                        clone_url = clone_url[:-1]
-                    
-                    # 打印调试信息
-                    print(f"GitHub仓库URL: {clone_url}")
-                    
-                    try:
-                        # 替换URL中的协议，添加token作为认证
-                        auth_url = clone_url.replace('https://', f'https://{account["username"]}:{account["token"]}@')
-                        print(f"使用认证URL添加远程仓库: {auth_url.replace(account['token'], '****')}")
-                        
-                        # 添加为远程仓库
-                        local_repo.create_remote("origin", auth_url)
-                        
-                        # 设置为上游分支
-                        local_repo.git.push('-u', 'origin', local_repo.active_branch.name)
-                    except Exception as git_error:
-                        QMessageBox.warning(
-                            self,
-                            "推送到远程仓库失败",
-                            f"远程仓库创建成功，但推送代码失败。\n"
-                            f"仓库URL: {clone_url}\n"
-                            f"错误信息: {str(git_error)}\n\n"
-                            f"您可以稍后通过'推送'按钮手动推送。"
-                        )
-            else:
+                    remote_url = result["clone_url"]
+                    info(f"GitHub远程仓库创建成功: {remote_url}")
+                else:
+                    error("GitHub远程仓库创建失败")
+                    QMessageBox.critical(self, "错误", "GitHub远程仓库创建失败，请检查网络和账号设置")
+                    return
+            elif platform == "gitlab":
                 # 创建GitLab远程仓库
                 result = account_manager.create_gitlab_repository(
                     account["url"],
@@ -629,40 +625,49 @@ class GitPanel(QWidget):
                 )
                 
                 if result:
-                    # 获取远程仓库URL
-                    clone_url = result["http_url_to_repo"]
-                    # 确保URL格式正确（去除末尾斜杠）
-                    if clone_url.endswith('/'):
-                        clone_url = clone_url[:-1]
+                    remote_url = result["http_url_to_repo"]
+                    info(f"GitLab远程仓库创建成功: {remote_url}")
+                else:
+                    error("GitLab远程仓库创建失败")
+                    QMessageBox.critical(self, "错误", "GitLab远程仓库创建失败，请检查网络和账号设置")
+                    return
+            
+            # 将远程仓库与本地仓库关联并推送内容
+            if remote_url:
+                # 设置远程仓库
+                debug(f"正在关联本地仓库与远程仓库: {remote_url}")
+                try:
+                    if 'origin' in [remote.name for remote in local_repo.remotes]:
+                        # 如果origin已存在，则设置URL
+                        local_repo.remote('origin').set_url(remote_url)
+                    else:
+                        # 创建新的远程引用
+                        local_repo.create_remote('origin', remote_url)
                     
-                    # 打印调试信息
-                    print(f"GitLab仓库URL: {clone_url}")
+                    # 修改远程仓库URL以包含token（用于推送时身份验证）
+                    authenticated_url = remote_url
+                    if platform == "github":
+                        authenticated_url = remote_url.replace('https://', f'https://{account["username"]}:{account["token"]}@')
+                    elif platform == "gitlab":
+                        authenticated_url = remote_url.replace('https://', f'https://oauth2:{account["token"]}@')
                     
-                    try:
-                        # 替换URL中的协议，添加token作为认证
-                        auth_url = clone_url.replace('https://', f'https://oauth2:{account["token"]}@')
-                        print(f"使用认证URL添加远程仓库: {auth_url.replace(account['token'], '****')}")
-                        
-                        # 添加为远程仓库
-                        local_repo.create_remote("origin", auth_url)
-                        
-                        # 设置为上游分支
-                        local_repo.git.push('-u', 'origin', local_repo.active_branch.name)
-                    except Exception as git_error:
-                        QMessageBox.warning(
-                            self,
-                            "推送到远程仓库失败",
-                            f"远程仓库创建成功，但推送代码失败。\n"
-                            f"仓库URL: {clone_url}\n"
-                            f"错误信息: {str(git_error)}\n\n"
-                            f"您可以稍后通过'推送'按钮手动推送。"
-                        )
+                    # 推送本地内容到远程仓库
+                    info(f"正在将本地仓库推送至远程: {remote_url}")
+                    local_repo.git.push('--set-upstream', authenticated_url, 'main')
+                    
+                    info(f"成功推送本地仓库至远程仓库: {remote_url}")
+                    return True
+                except Exception as e:
+                    error(f"无法关联或推送至远程仓库: {str(e)}")
+                    QMessageBox.warning(
+                        self, 
+                        "远程仓库关联警告", 
+                        f"远程仓库已创建，但无法推送本地内容:\n{str(e)}\n\n" +
+                        f"您需要手动执行推送操作。远程仓库URL: {remote_url}"
+                    )
         except Exception as e:
-            QMessageBox.warning(
-                self,
-                "创建远程仓库失败",
-                f"创建远程仓库时发生错误，仅完成本地仓库初始化。\n错误信息: {str(e)}"
-            )
+            error(f"创建远程仓库时发生错误: {str(e)}")
+            QMessageBox.critical(self, "错误", f"创建远程仓库时发生错误: {str(e)}")
 
     def refreshStatus(self):
         """ 刷新Git状态 """
@@ -724,7 +729,6 @@ class GitPanel(QWidget):
             # 根据是否有远程仓库来启用或禁用相关按钮
             self.pushBtn.setEnabled(has_remotes)
             self.pullBtn.setEnabled(has_remotes)
-            self.fetchBtn.setEnabled(has_remotes)
             self.syncBtn.setEnabled(has_remotes)
                 
         except Exception as e:
@@ -1417,65 +1421,86 @@ class GitPanel(QWidget):
         if not self.gitManager:
             return
             
-        # 获取提交信息
-        message = self.commitMsgEdit.text().strip()
-        if not message:
-            InfoBar.warning(
-                title="提交失败",
-                content="请输入提交信息",
-                orient=Qt.Horizontal,
-                isClosable=True,
-                position=InfoBarPosition.TOP,
-                duration=2000,
-                parent=self
-            )
+        # 获取更改文件列表
+        changed_files = self.gitManager.getChangedFiles()
+        
+        if not changed_files:
+            QMessageBox.information(self, "提示", "没有需要提交的更改")
             return
             
-        # 获取选中的文件
-        filesToCommit = []
-        for i in range(self.changesList.count()):
-            item = self.changesList.item(i)
-            widget = self.changesList.itemWidget(item)
-            checkbox = widget.layout().itemAt(0).widget()
-            pathLabel = widget.layout().itemAt(2).widget()
+        # 显示确认对话框，让用户选择要提交的文件和输入提交消息
+        dialog = QDialog(self)
+        dialog.setWindowTitle("提交更改")
+        dialog.resize(500, 400)
+        
+        layout = QVBoxLayout(dialog)
+        
+        # 提示标签
+        layout.addWidget(QLabel("请选择要提交的文件:"))
+        
+        # 文件列表
+        fileListWidget = QListWidget()
+        fileListWidget.setSelectionMode(QListWidget.MultiSelection)
+        
+        for status, file_path in changed_files:
+            item = QListWidgetItem(f"{status}: {file_path}")
+            item.setData(Qt.UserRole, file_path)
+            fileListWidget.addItem(item)
+            item.setSelected(True)  # 默认选择所有文件
             
-            if checkbox.isChecked():
-                filesToCommit.append(pathLabel.text())
+        layout.addWidget(fileListWidget)
+        
+        # 提交消息输入
+        layout.addWidget(QLabel("提交消息:"))
+        commitMessageEdit = LineEdit()
+        layout.addWidget(commitMessageEdit)
+        
+        # 按钮
+        btnLayout = QHBoxLayout()
+        commitBtn = PrimaryPushButton("提交")
+        cancelBtn = QPushButton("取消")
+        
+        btnLayout.addStretch(1)
+        btnLayout.addWidget(commitBtn)
+        btnLayout.addWidget(cancelBtn)
+        
+        layout.addLayout(btnLayout)
+        
+        # 连接信号
+        commitBtn.clicked.connect(dialog.accept)
+        cancelBtn.clicked.connect(dialog.reject)
+        
+        # 显示对话框
+        if dialog.exec_() != QDialog.Accepted:
+            return
+            
+        # 获取选择的文件
+        selected_files = []
+        for i in range(fileListWidget.count()):
+            item = fileListWidget.item(i)
+            if item.isSelected():
+                file_path = item.data(Qt.UserRole)
+                selected_files.append(file_path)
                 
-        if not filesToCommit:
-            InfoBar.warning(
-                title="提交失败",
-                content="请选择要提交的文件",
-                orient=Qt.Horizontal,
-                isClosable=True,
-                position=InfoBarPosition.TOP,
-                duration=2000,
-                parent=self
-            )
+        # 获取提交消息
+        commit_message = commitMessageEdit.text()
+        if not commit_message:
+            commit_message = "提交更改"
+            
+        # 检查是否有选择的文件
+        if not selected_files:
+            QMessageBox.warning(self, "警告", "没有选择要提交的文件")
             return
-            
-        try:
-            # 提交更改
-            self.gitManager.commit(filesToCommit, message)
-            
-            # 刷新状态
-            self.refreshStatus()
-            
-            # 清空提交信息
-            self.commitMsgEdit.clear()
-            
-            InfoBar.success(
-                title="提交成功",
-                content=f"已成功提交 {len(filesToCommit)} 个文件",
-                orient=Qt.Horizontal,
-                isClosable=True,
-                position=InfoBarPosition.TOP,
-                duration=2000,
-                parent=self
-            )
-        except Exception as e:
-            QMessageBox.critical(self, "错误", f"提交失败: {str(e)}")
-            
+        
+        # 使用Git线程执行提交操作
+        self.gitThread.setup(
+            operation='commit',
+            git_manager=self.gitManager,
+            file_paths=selected_files,
+            message=commit_message
+        )
+        self.gitThread.start()
+
     def pushChanges(self):
         """ 推送更改 """
         if not self.gitManager:
@@ -1485,53 +1510,54 @@ class GitPanel(QWidget):
         if not self.ensureRemoteExists("推送"):
             return
             
-        try:
-            # 获取当前分支
-            currentBranch = self.gitManager.getCurrentBranch()
-            
-            # 获取远程仓库列表
-            remotes = self.gitManager.getRemotes()
-            
-            remote_name = None
-            # 如果有多个远程仓库，让用户选择
-            if len(remotes) > 1:
-                remote_items = [remote for remote in remotes]
-                remote_name, ok = QInputDialog.getItem(
-                    self, "选择远程仓库", 
-                    "请选择要推送到的远程仓库:",
-                    remote_items, 0, False
-                )
-                
-                if not ok or not remote_name:
-                    return
-            else:
-                remote_name = remotes[0]
-                
-            # 确认对话框
-            reply = QMessageBox.question(
-                self, "确认推送", 
-                f"确定要将 {currentBranch} 分支推送到远程仓库 {remote_name} 吗?",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No
+        # 获取远程仓库列表
+        remotes = self.gitManager.getRemotes()
+        
+        remote_name = None
+        # 如果有多个远程仓库，让用户选择
+        if len(remotes) > 1:
+            remote_items = [remote for remote in remotes]
+            remote_name, ok = QInputDialog.getItem(
+                self, "选择远程仓库", 
+                "请选择要推送到的远程仓库:",
+                remote_items, 0, False
             )
             
-            if reply == QMessageBox.Yes:
-                # 推送更改到指定远程仓库
-                self.gitManager.push(remote_name, currentBranch)
-                
-                InfoBar.success(
-                    title="推送成功",
-                    content=f"已成功将 {currentBranch} 分支推送到远程仓库 {remote_name}",
-                    orient=Qt.Horizontal,
-                    isClosable=True,
-                    position=InfoBarPosition.TOP,
-                    duration=2000,
-                    parent=self
-                )
-        except Exception as e:
-            error_msg = str(e)
-            QMessageBox.critical(self, "推送失败", error_msg)
+            if not ok or not remote_name:
+                return
+        else:
+            remote_name = remotes[0]
+        
+        # 获取当前分支
+        branch = self.gitManager.getCurrentBranch()
+        
+        # 询问是否设置上游分支
+        set_upstream = False
+        try:
+            # 检查是否需要设置上游分支
+            # 通过检查git rev-parse命令的输出来判断
+            self.gitManager.repo.git.rev_parse(f'{remote_name}/{branch}')
+        except:
+            # 异常表示远程没有对应分支，询问是否设置上游
+            reply = QMessageBox.question(
+                self, "设置上游分支", 
+                f"远程仓库 {remote_name} 没有 {branch} 分支。\n是否要设置为上游分支？",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.Yes
+            )
             
+            set_upstream = (reply == QMessageBox.Yes)
+        
+        # 使用Git线程执行推送操作
+        self.gitThread.setup(
+            operation='push',
+            git_manager=self.gitManager,
+            remote_name=remote_name,
+            branch=branch,
+            set_upstream=set_upstream
+        )
+        self.gitThread.start()
+
     def pullChanges(self):
         """ 拉取更改 """
         if not self.gitManager:
@@ -1541,125 +1567,35 @@ class GitPanel(QWidget):
         if not self.ensureRemoteExists("拉取"):
             return
             
-        try:
-            # 获取当前分支
-            currentBranch = self.gitManager.getCurrentBranch()
-            
-            # 获取远程仓库列表
-            remotes = self.gitManager.getRemotes()
-            
-            remote_name = None
-            # 如果有多个远程仓库，让用户选择
-            if len(remotes) > 1:
-                remote_items = [remote for remote in remotes]
-                remote_name, ok = QInputDialog.getItem(
-                    self, "选择远程仓库", 
-                    "请选择要拉取的远程仓库:",
-                    remote_items, 0, False
-                )
-                
-                if not ok or not remote_name:
-                    return
-            else:
-                remote_name = remotes[0]
-                
-            # 确认对话框
-            reply = QMessageBox.question(
-                self, "确认拉取", 
-                f"确定要从远程仓库 {remote_name} 拉取 {currentBranch} 分支的更改吗?",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No
+        # 获取远程仓库列表
+        remotes = self.gitManager.getRemotes()
+        
+        remote_name = None
+        # 如果有多个远程仓库，让用户选择
+        if len(remotes) > 1:
+            remote_items = [remote for remote in remotes]
+            remote_name, ok = QInputDialog.getItem(
+                self, "选择远程仓库", 
+                "请选择要拉取的远程仓库:",
+                remote_items, 0, False
             )
             
-            if reply == QMessageBox.Yes:
-                # 拉取更改
-                self.gitManager.pull(remote_name, currentBranch)
-                
-                # 刷新状态
-                self.refreshStatus()
-                
-                InfoBar.success(
-                    title="拉取成功",
-                    content=f"已成功从远程仓库 {remote_name} 拉取 {currentBranch} 分支的更改",
-                    orient=Qt.Horizontal,
-                    isClosable=True,
-                    position=InfoBarPosition.TOP,
-                    duration=2000,
-                    parent=self
-                )
-        except Exception as e:
-            error_msg = str(e)
-            QMessageBox.critical(self, "拉取失败", error_msg)
-            
-    def ensureRemoteExists(self, operation_name="操作"):
-        """ 确保远程仓库存在，如果不存在则提示用户添加 
-        Args:
-            operation_name: 操作名称，用于错误提示
-        Returns:
-            bool: 是否存在远程仓库
-        """
-        if not self.gitManager:
-            return False
-            
-        try:
-            remotes = self.gitManager.getRemotes()
-            if not remotes:
-                reply = QMessageBox.question(
-                    self, f"无法{operation_name}", 
-                    f"当前仓库没有配置远程仓库，无法{operation_name}。\n是否现在添加远程仓库?",
-                    QMessageBox.Yes | QMessageBox.No,
-                    QMessageBox.Yes
-                )
-                
-                if reply == QMessageBox.Yes:
-                    self.addRemote()
-                return False
-            return True
-        except Exception:
-            return False
-            
-    def fetchChanges(self):
-        """ 抓取更改 """
-        if not self.gitManager:
-            return
-            
-        # 确保存在远程仓库
-        if not self.ensureRemoteExists("抓取"):
-            return
-            
-        try:
-            # 获取远程仓库列表
-            remotes = self.gitManager.getRemotes()
-            
-            remote_name = None
-            # 如果有多个远程仓库，让用户选择
-            if len(remotes) > 1:
-                remote_items = [remote for remote in remotes]
-                remote_name, ok = QInputDialog.getItem(
-                    self, "选择远程仓库", 
-                    "请选择要抓取的远程仓库:",
-                    remote_items, 0, False
-                )
-                
-                if not ok or not remote_name:
-                    return
-            else:
-                remote_name = remotes[0]
-                
-            # 抓取更改
-            self.gitManager.fetch(remote_name)
-            
-            InfoBar.success(
-                title="抓取成功",
-                content=f"已成功从远程仓库 {remote_name} 抓取更改",
-                orient=Qt.Horizontal,
-                isClosable=True,
-                position=InfoBarPosition.TOP,
-                duration=2000,
-                parent=self
-            )
-        except Exception as e:
-            QMessageBox.critical(self, "抓取失败", str(e))
+            if not ok or not remote_name:
+                return
+        else:
+            remote_name = remotes[0]
+        
+        # 获取当前分支
+        branch = self.gitManager.getCurrentBranch()
+        
+        # 使用Git线程执行拉取操作
+        self.gitThread.setup(
+            operation='pull',
+            git_manager=self.gitManager,
+            remote_name=remote_name,
+            branch=branch
+        )
+        self.gitThread.start()
 
     def importFromGitHub(self):
         """ 从GitHub导入仓库 """
@@ -1824,61 +1760,39 @@ class GitPanel(QWidget):
             if reply == QMessageBox.No:
                 return
                 
-        # 确认是否克隆指定分支
+        # 询问是否以递归方式克隆（包含子模块）
+        recursive = QMessageBox.question(
+            self, "克隆子模块", 
+            "是否以递归方式克隆（包含子模块）？",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        ) == QMessageBox.Yes
+        
+        # 询问是否指定分支
+        branch_reply = QMessageBox.question(
+            self, "指定分支", 
+            "是否要克隆特定分支？",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+        
         branch = None
-        reply = QMessageBox.question(
-            self, "克隆分支", 
-            "是否克隆特定分支？",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No
-        )
-        
-        if reply == QMessageBox.Yes:
-            branch_name, ok = QInputDialog.getText(
+        if branch_reply == QMessageBox.Yes:
+            branch, ok = QInputDialog.getText(
                 self, "分支名称", 
-                "请输入要克隆的分支名称:"
+                "请输入要克隆的分支名称:",
+                text="main"
             )
             
-            if ok and branch_name:
-                branch = branch_name
-                
-        # 是否递归克隆子模块
-        recursive = False
-        reply = QMessageBox.question(
-            self, "递归克隆", 
-            "是否递归克隆子模块？",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No
-        )
+            if not ok or not branch:
+                branch = None
         
-        if reply == QMessageBox.Yes:
-            recursive = True
-            
         try:
-            # 克隆仓库
-            GitManager.cloneRepository(url, target_path, branch, recursive=recursive)
+            # 使用异步方式克隆仓库
+            self.cloneRepositoryAsync(url, target_path, branch, None, recursive)
             
-            # 询问是否打开该仓库
-            reply = QMessageBox.question(
-                self, "打开仓库", 
-                f"仓库已成功克隆到 {target_path}，是否立即打开？",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.Yes
-            )
-            
-            if reply == QMessageBox.Yes:
-                self.setRepository(target_path)
-                self.repositoryOpened.emit(target_path)
-            
-            InfoBar.success(
-                title="克隆成功",
-                content=f"已成功克隆仓库到 {target_path}",
-                orient=Qt.Horizontal,
-                isClosable=True,
-                position=InfoBarPosition.TOP,
-                duration=2000,
-                parent=self
-            )
+            # 显示加载状态（加载状态会在操作完成后自动隐藏）
+            self.loadingMask.showLoading("正在克隆仓库", f"正在从 {url} 克隆仓库到 {target_path}...")
         except Exception as e:
             QMessageBox.critical(self, "错误", f"克隆仓库失败: {str(e)}")
 
@@ -1891,59 +1805,200 @@ class GitPanel(QWidget):
         if not self.ensureRemoteExists("同步"):
             return
             
-        try:
-            # 获取当前分支
-            currentBranch = self.gitManager.getCurrentBranch()
-            
-            # 获取远程仓库列表
-            remotes = self.gitManager.getRemotes()
-            
-            remote_name = None
-            # 如果有多个远程仓库，让用户选择
-            if len(remotes) > 1:
-                remote_items = [remote for remote in remotes]
-                remote_name, ok = QInputDialog.getItem(
-                    self, "选择远程仓库", 
-                    "请选择要同步的远程仓库:",
-                    remote_items, 0, False
-                )
-                
-                if not ok or not remote_name:
-                    return
-            else:
-                remote_name = remotes[0]
-                
-            # 确认对话框
-            reply = QMessageBox.question(
-                self, "确认同步", 
-                f"确定要与远程仓库 {remote_name} 同步 {currentBranch} 分支吗?\n" +
-                "这将执行 fetch+pull+push 操作。",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No
+        # 获取当前分支
+        currentBranch = self.gitManager.getCurrentBranch()
+        
+        # 获取远程仓库列表
+        remotes = self.gitManager.getRemotes()
+        
+        remote_name = None
+        # 如果有多个远程仓库，让用户选择
+        if len(remotes) > 1:
+            remote_items = [remote for remote in remotes]
+            remote_name, ok = QInputDialog.getItem(
+                self, "选择远程仓库", 
+                "请选择要同步的远程仓库:",
+                remote_items, 0, False
             )
             
-            if reply == QMessageBox.Yes:
-                # 执行同步步骤
-                # 1. 首先抓取
-                self.gitManager.fetch(remote_name)
+            if not ok or not remote_name:
+                return
+        else:
+            remote_name = remotes[0]
+            
+        # 确认对话框
+        reply = QMessageBox.question(
+            self, "确认同步", 
+            f"确定要与远程仓库 {remote_name} 同步 {currentBranch} 分支吗?\n" +
+            "这将执行 fetch+pull+push 操作。",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+        
+        if reply == QMessageBox.Yes:
+            # 使用Git线程执行同步操作
+            self.gitThread.setup(
+                operation='sync',
+                git_manager=self.gitManager,
+                remote_name=remote_name,
+                branch=currentBranch
+            )
+            self.gitThread.start()
+
+    def ensureRemoteExists(self, operation_name="操作"):
+        """ 确保远程仓库存在，如果不存在则提示用户添加 
+        Args:
+            operation_name: 操作名称，用于错误提示
+        Returns:
+            bool: 是否存在远程仓库
+        """
+        if not self.gitManager:
+            return False
+            
+        try:
+            remotes = self.gitManager.getRemotes()
+            if not remotes:
+                reply = QMessageBox.question(
+                    self, f"无法{operation_name}", 
+                    f"当前仓库没有配置远程仓库，无法{operation_name}。\n是否现在添加远程仓库?",
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.Yes
+                )
                 
-                # 2. 拉取更改
-                self.gitManager.pull(remote_name, currentBranch)
-                
-                # 3. 推送更改
-                self.gitManager.push(remote_name, currentBranch)
-                
-                # 刷新状态
-                self.refreshStatus()
-                
+                if reply == QMessageBox.Yes:
+                    self.addRemote()
+                return False
+            return True
+        except Exception:
+            return False
+
+    def onGitOperationStarted(self, operation):
+        """Git操作开始时的回调
+        
+        Args:
+            operation: 操作类型
+        """
+        # 构建操作标题映射
+        operation_titles = {
+            'pull': '正在拉取远程更新',
+            'push': '正在推送本地更改',
+            'fetch': '正在获取远程更新',
+            'commit': '正在提交更改',
+            'sync': '正在同步仓库',
+            'init': '正在初始化仓库',
+            'clone': '正在克隆仓库',
+        }
+        
+        # 获取操作标题或使用默认文本
+        title = operation_titles.get(operation, f'正在执行Git操作: {operation}')
+        description = f"请稍候，正在处理中..."
+        
+        try:
+            # 确保遮罩大小与父窗口一致
+            if self.loadingMask.parent():
+                self.loadingMask.resize(self.size())
+                self.loadingMask.move(0, 0)
+            
+            # 显示加载遮罩并保证是最顶层
+            self.loadingMask.showLoading(title, description)
+            self.loadingMask.setWindowFlags(self.loadingMask.windowFlags() | Qt.WindowStaysOnTopHint)
+            self.loadingMask.raise_()
+            self.loadingMask.activateWindow()
+            self.loadingMask.repaint()  # 强制重绘，确保立即显示
+        except Exception as e:
+            # 记录异常但不中断操作
+            error(f"显示加载遮罩时出错: {str(e)}")
+
+    def onGitOperationFinished(self, success, operation, message):
+        """Git操作完成时的回调
+        
+        Args:
+            success: 是否成功
+            operation: 操作类型
+            message: 结果消息
+        """
+        try:
+            # 隐藏加载遮罩
+            self.loadingMask.hideLoading()
+            
+            # 刷新状态
+            self.refreshStatus()
+            
+            # 显示操作结果
+            if success:
                 InfoBar.success(
-                    title="同步成功",
-                    content=f"已成功与远程仓库 {remote_name} 同步 {currentBranch} 分支",
+                    title=f"{operation}成功",
+                    content=message,
                     orient=Qt.Horizontal,
                     isClosable=True,
                     position=InfoBarPosition.TOP,
-                    duration=2000,
+                    duration=3000,
                     parent=self
                 )
+            else:
+                QMessageBox.critical(self, f"{operation}失败", message)
         except Exception as e:
-            QMessageBox.critical(self, "同步失败", str(e)) 
+            error(f"Git操作完成回调出错: {str(e)}")
+            # 确保UI更新，即使有错误
+            self.refreshStatus()
+
+    def onGitProgressUpdate(self, progress, message):
+        """Git操作进度更新的回调
+        
+        Args:
+            progress: 进度值（0-100）
+            message: 进度消息
+        """
+        self.loadingMask.updateProgress(progress, message)
+
+    def cloneRepositoryAsync(self, url, target_path, branch=None, depth=None, recursive=False):
+        """异步克隆仓库
+        
+        Args:
+            url: 仓库URL
+            target_path: 目标路径
+            branch: 分支名称
+            depth: 克隆深度
+            recursive: 是否递归克隆子模块
+        """
+        # 因为克隆操作不需要已存在的仓库，创建临时GitManager
+        temp_manager = GitManager.__new__(GitManager)
+        temp_manager.repo_path = os.path.dirname(target_path)
+        
+        # 使用Git线程执行克隆操作
+        self.gitThread.setup(
+            operation='clone',
+            git_manager=temp_manager,
+            url=url,
+            target_path=target_path,
+            branch=branch,
+            depth=depth,
+            recursive=recursive
+        )
+        
+        # 定义克隆完成的回调
+        def on_clone_finished(success, op, msg):
+            if success:
+                # 克隆成功，打开新仓库
+                self.setRepository(target_path)
+                
+                # 发出信号通知其他组件
+                self.repositoryOpened.emit(target_path)
+            
+            # 移除临时连接
+            self.gitThread.operationFinished.disconnect(on_clone_finished)
+        
+        # 临时连接，只处理一次克隆完成的回调
+        self.gitThread.operationFinished.connect(on_clone_finished)
+        
+        # 开始克隆
+        self.gitThread.start()
+
+    def resizeEvent(self, event):
+        """窗口大小改变事件，确保遮罩能够覆盖整个窗口"""
+        super().resizeEvent(event)
+        
+        # 如果遮罩显示中，调整其大小
+        if self.loadingMask and self.loadingMask.isVisible():
+            self.loadingMask.resize(self.size())
+            self.loadingMask.move(0, 0) 

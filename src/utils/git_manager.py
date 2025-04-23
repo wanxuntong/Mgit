@@ -4,9 +4,14 @@
 import os
 import git
 from datetime import datetime
+from src.utils.license_templates import get_cc_by_4_0_license
+import datetime as dt
 
 class GitManager:
     """ Git仓库管理器 """
+    
+    # 类级变量，用于防止循环调用
+    _is_fetching = False
     
     def __init__(self, repo_path):
         """ 初始化Git管理器 """
@@ -43,14 +48,27 @@ class GitManager:
         # 初始化仓库
         repo = git.Repo.init(path, initial_branch=initial_branch)
         
+        # 获取项目名称
+        project_name = os.path.basename(path)
+        
+        # 获取当前年份
+        current_year = dt.datetime.now().year
+        
         # 创建README文件
         readme_path = os.path.join(path, 'README.md')
         with open(readme_path, 'w', encoding='utf-8') as f:
-            f.write(f"# {os.path.basename(path)}\n\n初始化的Git仓库")
+            f.write(f"# {project_name}\n\n初始化的Git仓库")
+        
+        # 创建LICENSE文件（使用CC4.0许可证）
+        license_path = os.path.join(path, 'LICENSE')
+        with open(license_path, 'w', encoding='utf-8') as f:
+            license_content = get_cc_by_4_0_license(project_name, current_year, "Author")
+            f.write(license_content)
             
-        # 添加并提交README
+        # 添加并提交README和LICENSE
         repo.git.add('README.md')
-        repo.git.commit('-m', '初始化仓库')
+        repo.git.add('LICENSE')
+        repo.git.commit('-m', '初始化仓库，添加README和CC4.0协议LICENSE')
         
         return repo
             
@@ -423,9 +441,17 @@ class GitManager:
         if not self.isValidRepo():
             return
             
+        # 防止循环调用
+        if GitManager._is_fetching:
+            return
+            
         try:
-            self.repo.remotes[remote_name].fetch()
+            GitManager._is_fetching = True
+            # 使用git命令直接执行fetch，避免使用GitPython的高级API可能引起的循环调用
+            self.repo.git.fetch(remote_name)
+            GitManager._is_fetching = False
         except Exception as e:
+            GitManager._is_fetching = False
             raise Exception(f"获取更新失败: {str(e)}")
             
     def createBranch(self, branch_name, checkout=False):
@@ -715,9 +741,15 @@ class GitManager:
             # 如果未指定分支，使用当前分支
             if branch is None:
                 branch = self.getCurrentBranch()
-                
-            # 先拉取后推送
-            self.pull(remote_name, branch)
+            
+            # 先执行fetch操作
+            self.fetch(remote_name)
+            
+            # 执行merge操作（相当于git pull的第二步）
+            remote_branch = f"{remote_name}/{branch}"
+            self.repo.git.merge(remote_branch)
+            
+            # 推送更改
             self.push(remote_name, branch)
         except Exception as e:
             raise Exception(f"同步失败: {str(e)}")
@@ -746,7 +778,18 @@ class GitManager:
                     self.repo.create_remote(remote_name, url)
             else:
                 # 不添加为远程仓库，直接拉取合并
-                self.repo.git.fetch(url, f"{self.getCurrentBranch()}:temp_branch")
+                # 防止循环调用fetch
+                if not GitManager._is_fetching:
+                    try:
+                        GitManager._is_fetching = True
+                        # 使用git命令直接执行fetch，避免使用GitPython的高级API
+                        self.repo.git.fetch(url, f"{self.getCurrentBranch()}:temp_branch")
+                        GitManager._is_fetching = False
+                    except Exception as e:
+                        GitManager._is_fetching = False
+                        raise e
+                
+                # 合并临时分支
                 self.repo.git.merge("temp_branch")
                 # 删除临时分支
                 self.repo.git.branch("-D", "temp_branch")
