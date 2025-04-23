@@ -4,9 +4,13 @@
 import sys
 import os
 import signal
+import platform
 from PyQt5.QtWidgets import QApplication
 from PyQt5.QtCore import Qt, QCoreApplication
 from qfluentwidgets import FluentTranslator
+
+# 导入日志工具
+from src.utils.logger import info, warning, error, critical, exception, debug
 
 # 导入主窗口
 from src.views.main_window import MainWindow
@@ -20,11 +24,11 @@ def resource_path(relative_path):
 def signal_handler(sig, frame):
     """处理信号中断，如Ctrl+C"""
     if sig == signal.SIGINT:
-        print("\nKeyboard interrupt received, shutting down...")
+        critical("键盘中断接收，应用正在关闭...")
     elif sig == signal.SIGTERM:
-        print("\nTermination signal received, shutting down...")
+        critical("终止信号接收，应用正在关闭...")
     elif sig == signal.SIGSEGV:
-        print("\nSegmentation fault detected, attempting to save work...")
+        critical("检测到段错误，尝试保存工作...")
         # 尝试保存工作
         if 'w' in globals() and hasattr(w, 'editor') and hasattr(w.editor, 'document') and w.editor.document().isModified():
             try:
@@ -34,11 +38,11 @@ def signal_handler(sig, frame):
                 recovery_file = os.path.join(temp_dir, "mgit_recovery.md")
                 with open(recovery_file, 'w', encoding='utf-8') as f:
                     f.write(w.editor.toPlainText())
-                print(f"Saved recovery file to: {recovery_file}")
-            except:
-                pass
+                info(f"已保存恢复文件至: {recovery_file}")
+            except Exception as e:
+                error(f"保存恢复文件失败: {str(e)}")
     else:
-        print(f"\nSignal {sig} received, shutting down...")
+        warning(f"接收到信号 {sig}，应用正在关闭...")
         
     QApplication.quit()
     sys.exit(0)
@@ -65,10 +69,27 @@ def setup_signal_handling():
         # SIGFPE: 浮点异常
         signal.signal(signal.SIGFPE, signal_handler)
     except (AttributeError, ValueError) as e:
-        print(f"Warning: Some signal handlers could not be set: {e}")
+        warning(f"部分信号处理器无法设置: {e}")
 
 def main():
     """ 应用程序入口 """
+    info("========== MGit 应用程序启动 ==========")
+    
+    # 设置全局异常处理器
+    from src.utils.logger import setup_exception_logging
+    setup_exception_logging()
+    info("全局异常处理器已设置")
+    
+    # 记录系统信息
+    system_info = f"系统: {platform.system()} {platform.release()} ({platform.version()})"
+    python_info = f"Python: {platform.python_version()}"
+    info(f"运行环境: {system_info}, {python_info}")
+    
+    # 确保日志目录存在
+    from src.utils.logger import get_log_dir
+    log_dir = get_log_dir()
+    info(f"日志目录: {log_dir}")
+    
     # 设置应用信息
     QCoreApplication.setAttribute(Qt.AA_EnableHighDpiScaling)
     QCoreApplication.setAttribute(Qt.AA_UseHighDpiPixmaps)
@@ -77,20 +98,27 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName("MGit")
     app.setOrganizationName("MGitTeam")
+    info("Qt应用程序实例已创建")
     
     # 设置翻译器
     translator = FluentTranslator()
     app.installTranslator(translator)
     
     # 启动主窗口
+    info("正在初始化主窗口...")
     w = MainWindow()
     w.show()
+    info("主窗口显示成功")
     
     # 设置信号处理
     setup_signal_handling()
+    info("信号处理器设置完成")
     
+    info("应用程序进入事件循环...")
     # 运行应用
-    sys.exit(app.exec_())
+    exit_code = app.exec_()
+    info(f"应用程序结束退出，退出代码: {exit_code}")
+    sys.exit(exit_code)
     
 if __name__ == '__main__':
     main() 

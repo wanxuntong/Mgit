@@ -217,24 +217,36 @@ class GitManager:
             if branch is None:
                 branch = self.getCurrentBranch()
                 
+            # 获取远程URL以进行调试
+            remote = self.repo.remote(remote_name)
+            urls = list(remote.urls)
+            remote_url = urls[0] if urls else "未知URL"
+            print(f"准备推送到远程仓库: {remote_url}, 分支: {branch}")
+                
             # 推送更改
             if set_upstream:
+                # 添加调试信息
+                print(f"执行: git push -u {remote_name} {branch}")
                 self.repo.git.push('-u', remote_name, branch)
             else:
+                print(f"执行: git push {remote_name} {branch}")
                 self.repo.git.push(remote_name, branch)
         except git.exc.GitCommandError as e:
             error_msg = str(e).lower()
             if "could not resolve host" in error_msg:
                 raise Exception("无法连接到远程仓库，请检查网络连接")
-            elif "authentication failed" in error_msg:
-                raise Exception("身份验证失败，请检查您的凭据")
-            elif "not a git repository" in error_msg:
-                raise Exception(f"远程 '{remote_name}' 不是有效的Git仓库")
+            elif "authentication failed" in error_msg or "not authorized" in error_msg:
+                raise Exception("身份验证失败，请检查您的凭据和权限是否正确")
+            elif "not a git repository" in error_msg or "repository not found" in error_msg:
+                raise Exception(f"远程 '{remote_name}' 不是有效的Git仓库或您没有访问权限，URL: {remote_url}")
             elif "no such remote" in error_msg:
                 raise Exception(f"找不到名为 '{remote_name}' 的远程仓库")
             elif "refused" in error_msg:
                 raise Exception("远程仓库拒绝了推送，可能需要先拉取更新")
+            elif "remote contains work that you do" in error_msg or "reject" in error_msg:
+                raise Exception("远程仓库包含您没有的更改，请先使用拉取(pull)操作")
             else:
+                # 提供原始错误信息以便调试
                 raise Exception(f"推送更改失败: {str(e)}")
         except Exception as e:
             raise Exception(f"推送更改失败: {str(e)}")

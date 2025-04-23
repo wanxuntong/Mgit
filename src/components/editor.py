@@ -316,27 +316,22 @@ class EnhancedTextEdit(QPlainTextEdit):
         
     def insertMarkup(self, prefix, suffix):
         """ 插入Markdown标记 """
-        print(f"插入标记: 前缀='{prefix}', 后缀='{suffix}'")
         try:
             self.editor.insertMarkup(prefix, suffix)
-            print("标记插入成功")
         except Exception as e:
-            print(f"插入标记时出错: {str(e)}")
             import traceback
             traceback.print_exc()
             # 尝试直接使用textCursor插入
             try:
-                cursor = self.textCursor()
+                cursor = self.editor.textCursor()
                 selected_text = cursor.selectedText()
                 if selected_text:
                     cursor.insertText(prefix + selected_text + suffix)
                 else:
                     cursor.insertText(prefix + suffix)
                     cursor.movePosition(QTextCursor.Left, QTextCursor.MoveAnchor, len(suffix))
-                self.setTextCursor(cursor)
-                print("使用备用方法插入标记成功")
+                self.editor.setTextCursor(cursor)
             except Exception as e2:
-                print(f"备用插入方法也失败: {str(e2)}")
                 QMessageBox.critical(self, "插入标记错误", f"无法插入标记: {str(e)}")
         
     def createStandardContextMenu(self):
@@ -731,10 +726,7 @@ class MarkdownEditor(QWidget):
         self.headingCombo.addItem("标题 6", "###### ")
         self.headingCombo.setFixedWidth(100)
         
-        # 验证数据是否正确设置
-        for i in range(self.headingCombo.count()):
-            print(f"ComboBox 项 {i}: 文本={self.headingCombo.itemText(i)}, 数据={self.headingCombo.itemData(i)}")
-            
+        # 连接信号
         self.headingCombo.currentIndexChanged.connect(self.onHeadingSelected)
         self.toolbar.addWidget(self.headingCombo)
         
@@ -776,8 +768,6 @@ class MarkdownEditor(QWidget):
     def onHeadingSelected(self, index):
         """ 处理标题选择 """
         try:
-            print(f"选择的标题级别索引: {index}")
-            
             # 不再使用itemData，直接根据索引确定标题前缀
             heading_prefix = None
             if index == 1:
@@ -793,8 +783,6 @@ class MarkdownEditor(QWidget):
             elif index == 6:
                 heading_prefix = "###### "
             
-            print(f"使用标题前缀: '{heading_prefix}'")
-            
             if heading_prefix:
                 # 获取当前行
                 cursor = self.editor.textCursor()
@@ -807,16 +795,13 @@ class MarkdownEditor(QWidget):
                 # 移动到行尾并选择整行
                 cursor.movePosition(QTextCursor.EndOfLine, QTextCursor.KeepAnchor)
                 line_text = cursor.selectedText()
-                print(f"当前行文本: '{line_text}'")
                 
                 # 移除可能存在的标题标记
                 clean_text = re.sub(r'^#+\s*', '', line_text).strip()
-                print(f"清理后的文本: '{clean_text}'")
                 
                 # 插入新的标题标记和清理后的文本
                 cursor.removeSelectedText()
                 new_text = heading_prefix + clean_text
-                print(f"要插入的新文本: '{new_text}'")
                 cursor.insertText(new_text)
                 
                 # 恢复光标位置或设置到适当位置
@@ -824,26 +809,19 @@ class MarkdownEditor(QWidget):
                 self.editor.setTextCursor(cursor)
                 
                 cursor.endEditBlock()  # 结束编辑块
-                print("标题应用完成")
-            else:
-                print("未获取到标题前缀，无法应用")
             
             # 重置下拉框
             self.headingCombo.setCurrentIndex(0)
         except Exception as e:
-            print(f"标题选择功能错误: {str(e)}")
             import traceback
             traceback.print_exc()
             QMessageBox.critical(self, "标题功能错误", f"设置标题时发生错误: {str(e)}")
     
     def insertMarkup(self, prefix, suffix):
         """ 插入Markdown标记 """
-        print(f"插入标记: 前缀='{prefix}', 后缀='{suffix}'")
         try:
             self.editor.insertMarkup(prefix, suffix)
-            print("标记插入成功")
         except Exception as e:
-            print(f"插入标记时出错: {str(e)}")
             import traceback
             traceback.print_exc()
             # 尝试直接使用textCursor插入
@@ -856,9 +834,7 @@ class MarkdownEditor(QWidget):
                     cursor.insertText(prefix + suffix)
                     cursor.movePosition(QTextCursor.Left, QTextCursor.MoveAnchor, len(suffix))
                 self.editor.setTextCursor(cursor)
-                print("使用备用方法插入标记成功")
             except Exception as e2:
-                print(f"备用插入方法也失败: {str(e2)}")
                 QMessageBox.critical(self, "插入标记错误", f"无法插入标记: {str(e)}")
          
     def insertPlainText(self, text):

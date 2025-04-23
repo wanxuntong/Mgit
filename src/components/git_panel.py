@@ -4,7 +4,7 @@
 import os
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QLabel, QListWidget, QListWidgetItem,
                            QCheckBox, QHBoxLayout, QPushButton, QInputDialog, QMessageBox,
-                           QFileDialog, QComboBox, QToolBar, QAction, QSizePolicy, QMenu)
+                           QFileDialog, QComboBox, QToolBar, QAction, QSizePolicy, QMenu, QDialog)
 from PyQt5.QtCore import Qt, pyqtSignal, pyqtSlot
 from PyQt5.QtGui import QIcon, QCursor
 from qfluentwidgets import (LineEdit, PrimaryToolButton, FluentIcon, TitleLabel, 
@@ -13,6 +13,7 @@ from qfluentwidgets import (LineEdit, PrimaryToolButton, FluentIcon, TitleLabel,
                           ToolTipPosition)
 from src.utils.git_manager import GitManager
 from src.utils.config_manager import ConfigManager
+from src.utils.account_manager import AccountManager
 
 class GitPanel(QWidget):
     """ Git面板组件 """
@@ -425,9 +426,21 @@ class GitPanel(QWidget):
             if reply == QMessageBox.No:
                 return
         
+        # 询问是否同时创建远程仓库
+        createRemote = QMessageBox.question(
+            self, "创建远程仓库",
+            "是否同时在GitHub/GitLab上创建远程仓库？",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        ) == QMessageBox.Yes
+        
         try:
-            # 初始化仓库
-            GitManager.initRepository(fullRepoPath)
+            # 初始化本地仓库
+            local_repo = GitManager.initRepository(fullRepoPath)
+            
+            # 如果需要创建远程仓库
+            if createRemote:
+                self.createRemoteRepository(local_repo, fullRepoPath, repoName)
             
             # 设置为当前仓库
             self.setRepository(fullRepoPath)
@@ -437,7 +450,8 @@ class GitPanel(QWidget):
             
             InfoBar.success(
                 title="创建成功",
-                content=f"已成功创建并初始化Git仓库: {repoName}",
+                content=f"已成功创建并初始化Git仓库: {repoName}" +
+                        ("，并在远程创建了关联仓库" if createRemote else ""),
                 orient=Qt.Horizontal,
                 isClosable=True,
                 position=InfoBarPosition.TOP,
@@ -446,7 +460,210 @@ class GitPanel(QWidget):
             )
         except Exception as e:
             QMessageBox.critical(self, "错误", f"初始化仓库失败: {str(e)}")
+
+    def createRemoteRepository(self, local_repo, repo_path, repo_name):
+        """ 创建远程仓库并关联
+        Args:
+            local_repo: 本地仓库对象
+            repo_path: 本地仓库路径
+            repo_name: 仓库名称
+        """
+        # 延迟导入，避免循环引用
+        from src.components.account_dialog import AccountDialog
+        
+        # 创建账号管理器实例
+        account_manager = AccountManager()
+        
+        # 获取账号列表
+        github_accounts = account_manager.get_github_accounts()
+        gitlab_accounts = account_manager.get_gitlab_accounts()
+        
+        # 如果没有配置任何账号，提示添加账号
+        if not github_accounts and not gitlab_accounts:
+            reply = QMessageBox.question(
+                self, "添加账号",
+                "创建远程仓库需要配置GitHub或GitLab账号，是否现在添加账号？",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.Yes
+            )
             
+            if reply == QMessageBox.Yes:
+                dialog = AccountDialog(self)
+                if dialog.exec_() != QDialog.Accepted:
+                    # 用户取消了添加账号，直接返回
+                    return
+                
+                # 重新获取账号列表
+                github_accounts = account_manager.get_github_accounts()
+                gitlab_accounts = account_manager.get_gitlab_accounts()
+                
+                # 仍然没有账号，返回
+                if not github_accounts and not gitlab_accounts:
+                    return
+        
+        # 选择平台和账号
+        choices = []
+        for account in github_accounts:
+            choices.append({
+                "display": f"GitHub: {account['name']} ({account['username']})",
+                "platform": "github",
+                "account": account
+            })
+            
+        for account in gitlab_accounts:
+            choices.append({
+                "display": f"GitLab: {account['name']} ({account['username']})",
+                "platform": "gitlab",
+                "account": account
+            })
+        
+        # 显示选择对话框
+        if len(choices) == 1:
+            # 只有一个账号，直接使用
+            selected = choices[0]
+            # 询问是否创建为私有仓库
+            is_private = QMessageBox.question(
+                self, "仓库隐私设置",
+                "是否创建为私有仓库？",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No
+            ) == QMessageBox.Yes
+        else:
+            # 有多个账号，让用户选择
+            dialog = QDialog(self)
+            dialog.setWindowTitle("选择平台和账号")
+            dialog.resize(350, 150)
+            
+            layout = QVBoxLayout(dialog)
+            
+            # 选择提示
+            layout.addWidget(QLabel("请选择要在哪个平台上创建远程仓库:"))
+            
+            # 账号选择下拉框
+            combo = ComboBox()
+            for i, choice in enumerate(choices):
+                combo.addItem(choice["display"], i)
+            
+            layout.addWidget(combo)
+            
+            # 访问权限选择（仅对GitHub有效）
+            privacyBox = QCheckBox("创建为私有仓库")
+            layout.addWidget(privacyBox)
+            
+            # 按钮区域
+            btnLayout = QHBoxLayout()
+            okBtn = PrimaryPushButton("确定")
+            cancelBtn = QPushButton("取消")
+            
+            btnLayout.addStretch(1)
+            btnLayout.addWidget(okBtn)
+            btnLayout.addWidget(cancelBtn)
+            
+            layout.addLayout(btnLayout)
+            
+            # 连接信号
+            okBtn.clicked.connect(dialog.accept)
+            cancelBtn.clicked.connect(dialog.reject)
+            
+            # 显示对话框
+            if dialog.exec_() != QDialog.Accepted:
+                return
+            
+            # 获取选择的账号
+            index = combo.currentData()
+            selected = choices[index]
+            is_private = privacyBox.isChecked()
+        
+        # 根据平台创建远程仓库
+        platform = selected["platform"]
+        account = selected["account"]
+        
+        try:
+            if platform == "github":
+                # 创建GitHub远程仓库
+                result = account_manager.create_github_repository(
+                    account["username"],
+                    account["token"],
+                    repo_name,
+                    f"由MGit创建的仓库 - {repo_name}",
+                    private=is_private
+                )
+                
+                if result:
+                    # 获取远程仓库URL
+                    clone_url = result["clone_url"]
+                    # 确保URL格式正确（去除末尾斜杠）
+                    if clone_url.endswith('/'):
+                        clone_url = clone_url[:-1]
+                    
+                    # 打印调试信息
+                    print(f"GitHub仓库URL: {clone_url}")
+                    
+                    try:
+                        # 替换URL中的协议，添加token作为认证
+                        auth_url = clone_url.replace('https://', f'https://{account["username"]}:{account["token"]}@')
+                        print(f"使用认证URL添加远程仓库: {auth_url.replace(account['token'], '****')}")
+                        
+                        # 添加为远程仓库
+                        local_repo.create_remote("origin", auth_url)
+                        
+                        # 设置为上游分支
+                        local_repo.git.push('-u', 'origin', local_repo.active_branch.name)
+                    except Exception as git_error:
+                        QMessageBox.warning(
+                            self,
+                            "推送到远程仓库失败",
+                            f"远程仓库创建成功，但推送代码失败。\n"
+                            f"仓库URL: {clone_url}\n"
+                            f"错误信息: {str(git_error)}\n\n"
+                            f"您可以稍后通过'推送'按钮手动推送。"
+                        )
+            else:
+                # 创建GitLab远程仓库
+                result = account_manager.create_gitlab_repository(
+                    account["url"],
+                    account["token"],
+                    repo_name,
+                    f"由MGit创建的仓库 - {repo_name}",
+                    visibility="private" if is_private else "public"
+                )
+                
+                if result:
+                    # 获取远程仓库URL
+                    clone_url = result["http_url_to_repo"]
+                    # 确保URL格式正确（去除末尾斜杠）
+                    if clone_url.endswith('/'):
+                        clone_url = clone_url[:-1]
+                    
+                    # 打印调试信息
+                    print(f"GitLab仓库URL: {clone_url}")
+                    
+                    try:
+                        # 替换URL中的协议，添加token作为认证
+                        auth_url = clone_url.replace('https://', f'https://oauth2:{account["token"]}@')
+                        print(f"使用认证URL添加远程仓库: {auth_url.replace(account['token'], '****')}")
+                        
+                        # 添加为远程仓库
+                        local_repo.create_remote("origin", auth_url)
+                        
+                        # 设置为上游分支
+                        local_repo.git.push('-u', 'origin', local_repo.active_branch.name)
+                    except Exception as git_error:
+                        QMessageBox.warning(
+                            self,
+                            "推送到远程仓库失败",
+                            f"远程仓库创建成功，但推送代码失败。\n"
+                            f"仓库URL: {clone_url}\n"
+                            f"错误信息: {str(git_error)}\n\n"
+                            f"您可以稍后通过'推送'按钮手动推送。"
+                        )
+        except Exception as e:
+            QMessageBox.warning(
+                self,
+                "创建远程仓库失败",
+                f"创建远程仓库时发生错误，仅完成本地仓库初始化。\n错误信息: {str(e)}"
+            )
+
     def refreshStatus(self):
         """ 刷新Git状态 """
         if not self.gitManager:

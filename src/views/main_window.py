@@ -20,6 +20,9 @@ from src.components.git_panel import GitPanel
 from src.components.status_bar import StatusBar
 from src.utils.git_manager import GitManager
 from src.utils.config_manager import ConfigManager
+from src.components.account_dialog import AccountDialog
+from src.components.log_dialog import LogDialog
+from src.utils.logger import info, warning, error, critical, show_error_message
 
 class MainWindow(QMainWindow):
     """ 主窗口类 """
@@ -205,6 +208,16 @@ class MainWindow(QMainWindow):
         createRepoAction.triggered.connect(self.createNewRepository)
         gitMenu.addAction(createRepoAction)
         
+        gitMenu.addSeparator()
+        
+        # 添加账号管理菜单项
+        manageAccountsAction = QAction("账号管理", self)
+        manageAccountsAction.setIcon(FluentIcon.PEOPLE.icon())
+        manageAccountsAction.triggered.connect(self.showAccountManager)
+        gitMenu.addAction(manageAccountsAction)
+        
+        gitMenu.addSeparator()
+        
         # 最近仓库子菜单
         self.recentReposMenu = QMenu("最近仓库", self)
         self.recentReposMenu.setIcon(FluentIcon.HISTORY.icon())
@@ -222,25 +235,41 @@ class MainWindow(QMainWindow):
         # 视图菜单
         viewMenu = menuBar.addMenu("视图")
         
-        # 主题子菜单
+        # 设置主题子菜单
         themeMenu = QMenu("主题", self)
         themeMenu.setIcon(FluentIcon.BRUSH.icon())
         
-        # 主题选项
+        # 浅色主题
         lightThemeAction = QAction("浅色", self)
-        lightThemeAction.triggered.connect(lambda: self.setTheme("light"))
-        
-        darkThemeAction = QAction("深色", self)
-        darkThemeAction.triggered.connect(lambda: self.setTheme("dark"))
-        
-        autoThemeAction = QAction("自动", self)
-        autoThemeAction.triggered.connect(lambda: self.setTheme("auto"))
-        
+        lightThemeAction.triggered.connect(lambda: self.setTheme('light'))
         themeMenu.addAction(lightThemeAction)
+        
+        # 深色主题
+        darkThemeAction = QAction("深色", self)
+        darkThemeAction.triggered.connect(lambda: self.setTheme('dark'))
         themeMenu.addAction(darkThemeAction)
+        
+        # 自动主题
+        autoThemeAction = QAction("自动", self)
+        autoThemeAction.triggered.connect(lambda: self.setTheme('auto'))
         themeMenu.addAction(autoThemeAction)
         
         viewMenu.addMenu(themeMenu)
+        
+        # 工具菜单
+        toolsMenu = menuBar.addMenu("工具")
+        
+        # 账号管理
+        accountManagerAction = QAction("账号管理", self)
+        accountManagerAction.setIcon(FluentIcon.PEOPLE.icon())
+        accountManagerAction.triggered.connect(self.showAccountManager)
+        toolsMenu.addAction(accountManagerAction)
+        
+        # 日志管理
+        logManagerAction = QAction("日志管理", self)
+        logManagerAction.setIcon(FluentIcon.DOCUMENT.icon())
+        logManagerAction.triggered.connect(self.showLogManager)
+        toolsMenu.addAction(logManagerAction)
         
     def updateRecentRepositoriesMenu(self):
         """ 更新最近仓库菜单 """
@@ -411,7 +440,7 @@ class MainWindow(QMainWindow):
             
             return success
         except Exception as e:
-            QMessageBox.critical(self, "保存失败", f"保存文件时发生错误: {str(e)}")
+            show_error_message(self, "保存失败", "保存文件时发生错误", e)
             return False
             
     def saveFileAs(self):
@@ -1153,3 +1182,13 @@ class MainWindow(QMainWindow):
         
         # 接受关闭事件
         event.accept() 
+
+    def showAccountManager(self):
+        """ 显示账号管理对话框 """
+        dialog = AccountDialog(self)
+        dialog.exec_() 
+
+    def showLogManager(self):
+        """ 显示日志管理对话框 """
+        dialog = LogDialog(self)
+        dialog.exec_() 
