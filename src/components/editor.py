@@ -323,12 +323,8 @@ class EnhancedTextEdit(QPlainTextEdit):
     def insertMarkup(self, prefix, suffix):
         """ 插入Markdown标记 """
         try:
-            self.editor.insertMarkup(prefix, suffix)
-        except Exception as e:
-            import traceback
-            traceback.print_exc()
-            # 尝试直接使用textCursor插入
-            try:
+            # 使用self.editor而不是直接使用self
+            if hasattr(self, 'editor'):
                 cursor = self.editor.textCursor()
                 selected_text = cursor.selectedText()
                 if selected_text:
@@ -337,8 +333,10 @@ class EnhancedTextEdit(QPlainTextEdit):
                     cursor.insertText(prefix + suffix)
                     cursor.movePosition(QTextCursor.Left, QTextCursor.MoveAnchor, len(suffix))
                 self.editor.setTextCursor(cursor)
-            except Exception as e2:
-                QMessageBox.critical(self, "插入标记错误", f"无法插入标记: {str(e)}")
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            QMessageBox.critical(self, "插入标记错误", f"无法插入标记: {str(e)}")
         
     def createStandardContextMenu(self):
         """ 创建标准右键菜单并添加Markdown特有选项 """
@@ -386,13 +384,18 @@ class EnhancedTextEdit(QPlainTextEdit):
         
     def insertTable(self):
         """ 插入表格 """
-        table_text = """
+        if hasattr(self, 'editor'):
+            self.editor.insertTable()
+        else:
+            table_text = """
 | 列1 | 列2 | 列3 |
 |-----|-----|-----|
 | 内容 | 内容 | 内容 |
 | 内容 | 内容 | 内容 |
 """
-        self.insertPlainText(table_text)
+            cursor = self.textCursor()
+            cursor.insertText(table_text)
+            self.setTextCursor(cursor)
         
     def insertPlainText(self, text):
         """ 插入纯文本 """
@@ -725,7 +728,12 @@ class MarkdownEditor(QWidget):
         
     def setPlainText(self, text):
         """ 设置纯文本内容 """
-        self.editor.setPlainText(text)
+        if hasattr(self, 'editor'):
+            self.editor.setPlainText(text)
+        else:
+            cursor = self.textCursor()
+            cursor.insertText(text)
+            self.setTextCursor(cursor)
         
     def clearText(self):
         """ 清空编辑器内容 """
@@ -887,12 +895,8 @@ class MarkdownEditor(QWidget):
     def insertMarkup(self, prefix, suffix):
         """ 插入Markdown标记 """
         try:
-            self.editor.insertMarkup(prefix, suffix)
-        except Exception as e:
-            import traceback
-            traceback.print_exc()
-            # 尝试直接使用textCursor插入
-            try:
+            # 使用self.editor而不是直接使用self
+            if hasattr(self, 'editor'):
                 cursor = self.editor.textCursor()
                 selected_text = cursor.selectedText()
                 if selected_text:
@@ -901,16 +905,34 @@ class MarkdownEditor(QWidget):
                     cursor.insertText(prefix + suffix)
                     cursor.movePosition(QTextCursor.Left, QTextCursor.MoveAnchor, len(suffix))
                 self.editor.setTextCursor(cursor)
-            except Exception as e2:
-                QMessageBox.critical(self, "插入标记错误", f"无法插入标记: {str(e)}")
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            QMessageBox.critical(self, "插入标记错误", f"无法插入标记: {str(e)}")
          
     def insertPlainText(self, text):
         """ 插入纯文本 """
-        self.editor.insertPlainText(text)
+        if hasattr(self, 'editor'):
+            self.editor.insertPlainText(text)
+        else:
+            cursor = self.textCursor()
+            cursor.insertText(text)
+            self.setTextCursor(cursor)
         
     def insertTable(self):
         """ 插入表格 """
-        self.editor.insertTable()
+        if hasattr(self, 'editor'):
+            self.editor.insertTable()
+        else:
+            table_text = """
+| 列1 | 列2 | 列3 |
+|-----|-----|-----|
+| 内容 | 内容 | 内容 |
+| 内容 | 内容 | 内容 |
+"""
+            cursor = self.textCursor()
+            cursor.insertText(table_text)
+            self.setTextCursor(cursor)
         
     def saveFile(self):
         """ 保存文件 """

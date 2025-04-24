@@ -12,7 +12,6 @@ import subprocess
 import platform
 import time
 from pathlib import Path
-
 # 确保当前目录在Python路径中
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
