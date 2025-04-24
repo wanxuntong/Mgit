@@ -35,9 +35,20 @@ class GitManager:
         Returns:
             git.Repo: 初始化的仓库对象
         """
+        # 确保路径是绝对路径
+        path = os.path.abspath(path)
+        
+        # 输出路径信息用于调试
+        import sys
+        if hasattr(sys, "_MEIPASS"):
+            print(f"在PyInstaller环境中，初始化仓库路径: {path}")
+        
         # 创建目录（如果不存在）
         if not os.path.exists(path):
-            os.makedirs(path)
+            try:
+                os.makedirs(path)
+            except Exception as e:
+                raise Exception(f"无法创建目录 {path}: {str(e)}")
             
         # 检查目录是否为空
         if os.listdir(path):
@@ -46,7 +57,10 @@ class GitManager:
                 return git.Repo(path)
         
         # 初始化仓库
-        repo = git.Repo.init(path, initial_branch=initial_branch)
+        try:
+            repo = git.Repo.init(path, initial_branch=initial_branch)
+        except Exception as e:
+            raise Exception(f"初始化仓库失败: {str(e)}")
         
         # 获取项目名称
         project_name = os.path.basename(path)
@@ -54,21 +68,24 @@ class GitManager:
         # 获取当前年份
         current_year = dt.datetime.now().year
         
-        # 创建README文件
-        readme_path = os.path.join(path, 'README.md')
-        with open(readme_path, 'w', encoding='utf-8') as f:
-            f.write(f"# {project_name}\n\n初始化的Git仓库")
-        
-        # 创建LICENSE文件（使用CC4.0许可证）
-        license_path = os.path.join(path, 'LICENSE')
-        with open(license_path, 'w', encoding='utf-8') as f:
-            license_content = get_cc_by_4_0_license(project_name, current_year, "Author")
-            f.write(license_content)
+        try:
+            # 创建README文件
+            readme_path = os.path.join(path, 'README.md')
+            with open(readme_path, 'w', encoding='utf-8') as f:
+                f.write(f"# {project_name}\n\n初始化的Git仓库")
             
-        # 添加并提交README和LICENSE
-        repo.git.add('README.md')
-        repo.git.add('LICENSE')
-        repo.git.commit('-m', '初始化仓库，添加README和CC4.0协议LICENSE')
+            # 创建LICENSE文件（使用CC4.0许可证）
+            license_path = os.path.join(path, 'LICENSE')
+            with open(license_path, 'w', encoding='utf-8') as f:
+                license_content = get_cc_by_4_0_license(project_name, current_year, "Author")
+                f.write(license_content)
+                
+            # 添加并提交README和LICENSE
+            repo.git.add('README.md')
+            repo.git.add('LICENSE')
+            repo.git.commit('-m', '初始化仓库，添加README和CC4.0协议LICENSE')
+        except Exception as e:
+            raise Exception(f"初始化仓库文件失败: {str(e)}")
         
         return repo
             

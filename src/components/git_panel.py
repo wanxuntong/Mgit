@@ -411,6 +411,10 @@ class GitPanel(QWidget):
         if not repoPath:
             return
             
+        # 确保路径是绝对路径
+        repoPath = os.path.abspath(repoPath)
+        info(f"GitPanel - 选择的仓库位置: {repoPath}")
+            
         # 输入仓库名称
         repoName, ok = QInputDialog.getText(
             self, "创建仓库", "请输入仓库名称:"
@@ -419,8 +423,12 @@ class GitPanel(QWidget):
         if not ok or not repoName:
             return
             
+        info(f"GitPanel - 仓库名称: {repoName}")
+            
         # 完整的仓库路径
         fullRepoPath = os.path.join(repoPath, repoName)
+        fullRepoPath = os.path.abspath(fullRepoPath)
+        info(f"GitPanel - 完整的仓库路径: {fullRepoPath}")
         
         # 检查路径是否已存在
         if os.path.exists(fullRepoPath) and os.listdir(fullRepoPath):
@@ -443,13 +451,12 @@ class GitPanel(QWidget):
         ) == QMessageBox.Yes
         
         try:
-            # 初始化本地仓库（使用静态方法，需要创建临时GitManager）
-            temp_manager = GitManager(os.path.dirname(fullRepoPath))
+            info(f"GitPanel - 开始初始化仓库: {fullRepoPath}")
             
             # 使用Git线程执行初始化操作
             self.gitThread.setup(
                 operation='init',
-                git_manager=temp_manager,
+                git_manager=None,  # 不再需要GitManager实例
                 path=fullRepoPath,
                 initial_branch="main"
             )
@@ -458,16 +465,28 @@ class GitPanel(QWidget):
             # 这个方法会在Git操作完成后在onGitOperationFinished中调用
             def on_init_finished(success, op, msg):
                 if success:
-                    # 初始化成功，创建远程仓库（如果需要）
-                    local_repo = git.Repo(fullRepoPath)
-                    if createRemote:
-                        self.createRemoteRepository(local_repo, fullRepoPath, repoName)
-                    
-                    # 设置为当前仓库
-                    self.setRepository(fullRepoPath)
-                    
-                    # 发出信号通知其他组件
-                    self.repositoryInitialized.emit(fullRepoPath)
+                    info(f"GitPanel - 仓库初始化成功: {fullRepoPath}")
+                    # 尝试打开新创建的仓库
+                    try:
+                        # 初始化成功，创建远程仓库（如果需要）
+                        local_repo = git.Repo(fullRepoPath)
+                        if createRemote:
+                            self.createRemoteRepository(local_repo, fullRepoPath, repoName)
+                        
+                        # 设置为当前仓库
+                        self.setRepository(fullRepoPath)
+                        
+                        # 发出信号通知其他组件
+                        self.repositoryInitialized.emit(fullRepoPath)
+                    except Exception as e:
+                        error(f"GitPanel - 仓库创建成功但打开失败: {str(e)}")
+                        QMessageBox.information(
+                            self, 
+                            "仓库创建成功", 
+                            f"仓库已创建成功，但打开时出错: {str(e)}\n仓库路径: {fullRepoPath}"
+                        )
+                else:
+                    error(f"GitPanel - 仓库初始化失败: {msg}")
                 
                 # 移除临时连接
                 self.gitThread.operationFinished.disconnect(on_init_finished)
@@ -476,6 +495,7 @@ class GitPanel(QWidget):
             self.gitThread.operationFinished.connect(on_init_finished)
             
         except Exception as e:
+            error(f"GitPanel - 初始化仓库失败: {str(e)}, 路径: {fullRepoPath}")
             QMessageBox.critical(self, "错误", f"初始化仓库失败: {str(e)}")
 
     def createRemoteRepository(self, local_repo, repo_path, repo_name):
@@ -1961,14 +1981,13 @@ class GitPanel(QWidget):
             depth: 克隆深度
             recursive: 是否递归克隆子模块
         """
-        # 因为克隆操作不需要已存在的仓库，创建临时GitManager
-        temp_manager = GitManager.__new__(GitManager)
-        temp_manager.repo_path = os.path.dirname(target_path)
+        # 使用Git线程执行克隆操作，直接使用静态方法而不创建临时GitManager
+        from src.utils.git_manager import GitManager
         
         # 使用Git线程执行克隆操作
         self.gitThread.setup(
             operation='clone',
-            git_manager=temp_manager,
+            git_manager=None,  # 不使用临时GitManager
             url=url,
             target_path=target_path,
             branch=branch,
@@ -1980,10 +1999,18 @@ class GitPanel(QWidget):
         def on_clone_finished(success, op, msg):
             if success:
                 # 克隆成功，打开新仓库
-                self.setRepository(target_path)
-                
-                # 发出信号通知其他组件
-                self.repositoryOpened.emit(target_path)
+                try:
+                    self.setRepository(target_path)
+                    
+                    # 发出信号通知其他组件
+                    self.repositoryOpened.emit(target_path)
+                except Exception as e:
+                    error(f"克隆成功但打开仓库失败: {str(e)}")
+                    QMessageBox.information(
+                        self, 
+                        "克隆成功", 
+                        f"仓库已克隆成功，但打开时出错: {str(e)}\n仓库路径: {target_path}"
+                    )
             
             # 移除临时连接
             self.gitThread.operationFinished.disconnect(on_clone_finished)

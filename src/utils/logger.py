@@ -5,8 +5,37 @@ import os
 import sys
 import logging
 import time
+import tempfile
 from pathlib import Path
 from logging.handlers import RotatingFileHandler
+
+# 确保资源路径正确
+def resource_path(relative_path):
+    """ 获取资源的绝对路径，处理PyInstaller打包后的路径 """
+    base_path = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base_path, relative_path)
+
+def get_log_dir():
+    """获取日志目录，确保其存在"""
+    try:
+        # 首先尝试使用用户主目录
+        home_dir = str(Path.home())
+        log_dir = os.path.join(home_dir, '.mgit', 'logs')
+    except Exception:
+        # 如果无法获取主目录，使用临时目录
+        log_dir = os.path.join(tempfile.gettempdir(), 'mgit', 'logs')
+    
+    # 确保目录存在
+    if not os.path.exists(log_dir):
+        try:
+            os.makedirs(log_dir)
+        except Exception:
+            # 如果创建失败，回退到临时目录
+            log_dir = os.path.join(tempfile.gettempdir(), 'mgit', 'logs')
+            if not os.path.exists(log_dir):
+                os.makedirs(log_dir)
+    
+    return log_dir
 
 class Logger:
     """应用日志记录器，提供统一的日志记录接口"""
@@ -28,11 +57,8 @@ class Logger:
         self._initialized = True
         self.app_name = app_name
         
-        # 创建日志目录
-        home_dir = str(Path.home())
-        self.log_dir = os.path.join(home_dir, '.mgit', 'logs')
-        if not os.path.exists(self.log_dir):
-            os.makedirs(self.log_dir)
+        # 使用获取日志目录的函数
+        self.log_dir = get_log_dir()
         
         # 设置日志文件路径
         self.log_file = os.path.join(self.log_dir, f"{self.app_name.lower()}.log")

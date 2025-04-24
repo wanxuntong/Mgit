@@ -12,8 +12,20 @@ import subprocess
 import platform
 import time
 from pathlib import Path
+try:
+    import pyi_splash
+    pyi_splash.close()
+except ImportError:
+    pass
+# 确保资源路径正确
+def resource_path(relative_path):
+    """ 获取资源的绝对路径，处理PyInstaller打包后的路径 """
+    base_path = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base_path, relative_path)
+
 # 确保当前目录在Python路径中
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+base_dir = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, base_dir)
 
 # 导入日志模块
 from src.utils.logger import info, warning, error, debug, critical

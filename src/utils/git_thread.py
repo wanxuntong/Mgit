@@ -32,9 +32,9 @@ class GitThread(QThread):
         
     def run(self):
         """执行Git操作的线程主函数"""
-        if not self.operation or not self.git_manager:
-            error("Git线程：未设置操作或GitManager")
-            self.operationFinished.emit(False, "未知操作", "未设置操作或GitManager")
+        if not self.operation:
+            error("Git线程：未设置操作")
+            self.operationFinished.emit(False, "未知操作", "未设置操作")
             return
             
         try:
@@ -45,12 +45,16 @@ class GitThread(QThread):
             # 根据操作类型执行不同的方法
             result = None
             if self.operation == 'pull':
+                if not self.git_manager:
+                    raise Exception("未设置GitManager实例")
                 remote_name = self.params.get('remote_name', 'origin')
                 branch = self.params.get('branch', None)
                 self.git_manager.pull(remote_name, branch)
                 result = f"已从 {remote_name} 成功拉取更新"
                 
             elif self.operation == 'push':
+                if not self.git_manager:
+                    raise Exception("未设置GitManager实例")
                 remote_name = self.params.get('remote_name', 'origin')
                 branch = self.params.get('branch', None)
                 set_upstream = self.params.get('set_upstream', False)
@@ -58,17 +62,23 @@ class GitThread(QThread):
                 result = f"已成功推送至 {remote_name}"
                 
             elif self.operation == 'fetch':
+                if not self.git_manager:
+                    raise Exception("未设置GitManager实例")
                 remote_name = self.params.get('remote_name', 'origin')
                 self.git_manager.fetch(remote_name)
                 result = f"已从 {remote_name} 获取最新更改"
                 
             elif self.operation == 'commit':
+                if not self.git_manager:
+                    raise Exception("未设置GitManager实例")
                 file_paths = self.params.get('file_paths', [])
                 message = self.params.get('message', '提交更改')
                 self.git_manager.commit(file_paths, message)
                 result = f"已成功提交更改: {message}"
                 
             elif self.operation == 'sync':
+                if not self.git_manager:
+                    raise Exception("未设置GitManager实例")
                 remote_name = self.params.get('remote_name', 'origin')
                 branch = self.params.get('branch', None)
                 self.git_manager.syncWithRemote(remote_name, branch)
@@ -76,17 +86,33 @@ class GitThread(QThread):
                 
             elif self.operation == 'init':
                 path = self.params.get('path')
+                if not path:
+                    raise Exception("初始化仓库未提供路径")
                 initial_branch = self.params.get('initial_branch', 'main')
-                result = self.git_manager.initRepository(path, initial_branch)
+                
+                # 使用静态方法初始化仓库，不需要GitManager实例
+                from src.utils.git_manager import GitManager
+                debug(f"Git线程：直接调用静态方法初始化仓库: {path}")
+                GitManager.initRepository(path, initial_branch)
                 result = f"已在 {path} 初始化仓库"
                 
             elif self.operation == 'clone':
                 url = self.params.get('url')
+                if not url:
+                    raise Exception("克隆仓库未提供URL")
+                    
                 target_path = self.params.get('target_path')
+                if not target_path:
+                    raise Exception("克隆仓库未提供目标路径")
+                    
                 branch = self.params.get('branch')
                 depth = self.params.get('depth')
                 recursive = self.params.get('recursive', False)
-                result = self.git_manager.cloneRepository(url, target_path, branch, depth, recursive)
+                
+                # 使用静态方法克隆仓库，不需要GitManager实例
+                from src.utils.git_manager import GitManager
+                debug(f"Git线程：直接调用静态方法克隆仓库: {url} -> {target_path}")
+                GitManager.cloneRepository(url, target_path, branch, depth, recursive)
                 result = f"已克隆仓库至 {target_path}"
                 
             else:

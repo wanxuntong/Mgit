@@ -6,7 +6,7 @@ import sys
 from PyQt5.QtWidgets import (QMainWindow, QVBoxLayout, QWidget, QSplitter, QMessageBox, 
                            QStackedWidget, QFileDialog, QMenuBar, QMenu, QAction)
 from PyQt5.QtCore import Qt, QSize, pyqtSignal, QTimer
-from PyQt5.QtGui import QIcon, QFont, QKeySequence
+from PyQt5.QtGui import QIcon, QFont, QKeySequence, QColor, QTextCharFormat, QTextCursor
 
 from qfluentwidgets import (NavigationInterface, NavigationItemPosition, 
                           FluentIcon, SubtitleLabel, setTheme, Theme, 
@@ -41,6 +41,21 @@ class MainWindow(QMainWindow):
         # 窗口设置
         self.setWindowTitle("MGit - Markdown笔记与Git版本控制")
         self.resize(1200, 800)
+        
+        # 设置窗口图标
+        try:
+            # 尝试获取应用图标路径
+            base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            icon_path = os.path.join(base_dir, 'app.ico')
+            
+            # 也考虑PyInstaller打包环境
+            if not os.path.exists(icon_path) and hasattr(sys, '_MEIPASS'):
+                icon_path = os.path.join(sys._MEIPASS, 'app.ico')
+            
+            if os.path.exists(icon_path):
+                self.setWindowIcon(QIcon(icon_path))
+        except Exception as e:
+            warning(f"设置窗口图标出错: {str(e)}")
         
         # 初始化UI
         self.initUI()
@@ -526,6 +541,10 @@ class MainWindow(QMainWindow):
         if not repoPath:
             return
             
+        # 确保路径是绝对路径
+        repoPath = os.path.abspath(repoPath)
+        info(f"选择的仓库位置: {repoPath}")
+            
         # 输入仓库名称
         from PyQt5.QtWidgets import QInputDialog
         repoName, ok = QInputDialog.getText(
@@ -535,8 +554,12 @@ class MainWindow(QMainWindow):
         if not ok or not repoName:
             return
             
+        info(f"仓库名称: {repoName}")
+            
         # 完整的仓库路径
         fullRepoPath = os.path.join(repoPath, repoName)
+        fullRepoPath = os.path.abspath(fullRepoPath)
+        info(f"完整的仓库路径: {fullRepoPath}")
         
         # 检查路径是否已存在
         if os.path.exists(fullRepoPath) and os.listdir(fullRepoPath):
@@ -551,22 +574,37 @@ class MainWindow(QMainWindow):
                 return
         
         try:
+            info(f"开始初始化仓库: {fullRepoPath}")
             # 初始化仓库
             GitManager.initRepository(fullRepoPath)
             
             # 打开新创建的仓库
-            self.openRepository(fullRepoPath)
+            success = self.openRepository(fullRepoPath)
             
-            InfoBar.success(
-                title="创建成功",
-                content=f"已成功创建并初始化Git仓库: {repoName}",
-                orient=Qt.Horizontal,
-                isClosable=True,
-                position=InfoBarPosition.TOP,
-                duration=3000,
-                parent=self
-            )
+            if success:
+                info(f"成功创建并打开仓库: {fullRepoPath}")
+                InfoBar.success(
+                    title="创建成功",
+                    content=f"已成功创建并初始化Git仓库: {repoName}",
+                    orient=Qt.Horizontal,
+                    isClosable=True,
+                    position=InfoBarPosition.TOP,
+                    duration=3000,
+                    parent=self
+                )
+            else:
+                warning(f"仓库创建成功，但打开失败: {fullRepoPath}")
+                InfoBar.warning(
+                    title="部分成功",
+                    content=f"已创建仓库，但打开失败: {repoName}",
+                    orient=Qt.Horizontal,
+                    isClosable=True,
+                    position=InfoBarPosition.TOP,
+                    duration=3000,
+                    parent=self
+                )
         except Exception as e:
+            error(f"创建仓库失败: {str(e)}, 路径: {fullRepoPath}")
             QMessageBox.critical(self, "错误", f"创建仓库失败: {str(e)}")
         
     def loadFile(self, filePath):
@@ -1038,136 +1076,143 @@ class MainWindow(QMainWindow):
         compareShortcut.activated.connect(self.compareWithSaved)
 
     def revertToGitVersion(self):
-        """ 回退文件到指定Git版本 """
-        currentFile = self.statusBar.getCurrentFile()
-        if not currentFile or not os.path.exists(currentFile):
-            InfoBar.warning(
-                title="无法回退",
-                content="没有当前文件可以回退",
-                orient=Qt.Horizontal,
-                isClosable=True,
-                position=InfoBarPosition.TOP,
-                duration=2000,
-                parent=self
-            )
-            return
-            
+        """还原到Git版本"""
         try:
+            # 检查当前编辑器是否有打开的文件
+            if not self.editor or not self.editor.currentFilePath:
+                QMessageBox.warning(self, "还原失败", "没有打开的文件")
+                return
+            
+            file_path = self.editor.currentFilePath
+            
+            # 检查文件是否存在
+            if not os.path.exists(file_path):
+                QMessageBox.warning(self, "还原失败", f"文件不存在: {file_path}")
+                return
+            
             # 检查是否在Git仓库中
             repo_path = self.statusBar.getCurrentRepository()
             if not repo_path:
-                InfoBar.warning(
-                    title="未关联Git仓库",
-                    content="当前文件不在Git仓库中，无法回退到Git版本",
-                    orient=Qt.Horizontal,
-                    isClosable=True,
-                    position=InfoBarPosition.TOP,
-                    duration=2000,
-                    parent=self
-                )
+                QMessageBox.warning(self, "还原失败", "文件不在Git仓库中")
                 return
-                
-            # 创建临时Git管理器
-            gitManager = GitManager(repo_path)
             
-            # 检查文件是否在Git跟踪中
-            relative_path = os.path.relpath(currentFile, repo_path)
-            if not gitManager.isFileTracked(relative_path):
-                InfoBar.warning(
-                    title="文件未跟踪",
-                    content="当前文件未被Git跟踪，无法回退到Git版本",
-                    orient=Qt.Horizontal,
-                    isClosable=True,
-                    position=InfoBarPosition.TOP,
-                    duration=2000,
-                    parent=self
-                )
+            # 初始化或获取Git管理器
+            if not self.gitManager:
+                self.gitManager = GitManager(repo_path)
+            
+            try:
+                # 检查文件是否在Git仓库中
+                relative_path = os.path.relpath(file_path, repo_path)
+                if not self.gitManager.isFileTracked(relative_path):
+                    QMessageBox.warning(self, "还原失败", "文件未被Git跟踪")
+                    return
+            except Exception as e:
+                QMessageBox.warning(self, "还原失败", f"检查Git跟踪状态时出错: {str(e)}")
                 return
-                
-            # 获取不同版本选择
-            versions = gitManager.getFileCommitHistory(relative_path, max_count=10)
-            if not versions:
-                InfoBar.warning(
-                    title="无历史版本",
-                    content="找不到文件的历史版本",
-                    orient=Qt.Horizontal,
-                    isClosable=True,
-                    position=InfoBarPosition.TOP,
-                    duration=2000,
-                    parent=self
-                )
-                return
-                
-            # 创建版本选择对话框
-            from PyQt5.QtWidgets import QDialog, QVBoxLayout, QListWidget, QDialogButtonBox, QListWidgetItem
             
-            dialog = QDialog(self)
-            dialog.setWindowTitle("选择要回退到的Git版本")
-            layout = QVBoxLayout(dialog)
-            
-            # 列表显示可用版本
-            versionList = QListWidget()
-            for commit in versions:
-                item = QListWidgetItem(f"{commit['hash'][:7]} - {commit['date']} - {commit['message']}")
-                item.setData(Qt.UserRole, commit)
-                versionList.addItem(item)
-                
-            layout.addWidget(versionList)
-            
-            # 添加确定和取消按钮
-            buttonBox = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-            buttonBox.accepted.connect(dialog.accept)
-            buttonBox.rejected.connect(dialog.reject)
-            layout.addWidget(buttonBox)
-            
-            # 显示对话框
-            if dialog.exec_() == QDialog.Accepted and versionList.currentItem():
-                selected_commit = versionList.currentItem().data(Qt.UserRole)
-                
-                # 确认是否回退
+            # 检查是否有未保存的修改
+            if self.editor.editor.document().isModified():
                 reply = QMessageBox.question(
-                    self, "确认回退", 
-                    f"确定要回退到 {selected_commit['hash'][:7]} - {selected_commit['date']} 的版本吗？\n"
-                    f"此操作会覆盖当前文件的内容，且未保存的更改将丢失。",
-                    QMessageBox.Yes | QMessageBox.No,
-                    QMessageBox.No
+                    self, 
+                    "未保存的修改", 
+                    "文件有未保存的修改。继续操作将丢失这些修改。\n是否先保存文件？",
+                    QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel
                 )
                 
-                if reply == QMessageBox.No:
+                if reply == QMessageBox.Save:
+                    self.saveFile()
+                elif reply == QMessageBox.Cancel:
+                    return
+                # 如果选择Discard，继续执行
+            
+            try:
+                # 获取文件的Git历史记录
+                versions = self.gitManager.getFileCommitHistory(relative_path, max_count=10)
+                
+                if not versions:
+                    QMessageBox.warning(
+                        self, 
+                        "无法获取历史记录", 
+                        "无法获取文件的Git历史记录。文件可能是新创建的或未提交。"
+                    )
                     return
                     
-                # 回退文件到选中的版本
-                if gitManager.revertFileToCommit(relative_path, selected_commit['hash']):
-                    # 重新加载文件到编辑器
-                    with open(currentFile, 'r', encoding='utf-8') as f:
-                        content = f.read()
-                        self.editor.setPlainText(content)
+                # 显示版本选择对话框
+                from PyQt5.QtWidgets import QDialog, QVBoxLayout, QListWidget, QDialogButtonBox, QListWidgetItem
+                
+                dialog = QDialog(self)
+                dialog.setWindowTitle("选择Git版本进行还原")
+                layout = QVBoxLayout(dialog)
+                
+                # 列表显示可用版本
+                versionList = QListWidget()
+                for commit in versions:
+                    item = QListWidgetItem(f"{commit['hash'][:7]} - {commit['date']} - {commit['message']}")
+                    item.setData(Qt.UserRole, commit)
+                    versionList.addItem(item)
+                    
+                layout.addWidget(versionList)
+                
+                # 添加确定和取消按钮
+                buttonBox = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+                buttonBox.accepted.connect(dialog.accept)
+                buttonBox.rejected.connect(dialog.reject)
+                layout.addWidget(buttonBox)
+                
+                # 显示对话框
+                if dialog.exec_() == QDialog.Accepted and versionList.currentItem():
+                    selected_commit = versionList.currentItem().data(Qt.UserRole)
+                    
+                    # 再次确认
+                    confirm = QMessageBox.question(
+                        self,
+                        "确认还原",
+                        f"确定要将文件还原到提交 {selected_commit['hash'][:8]} 的版本吗？\n\n"
+                        f"提交信息: {selected_commit['message']}\n"
+                        f"日期: {selected_commit['date']}",
+                        QMessageBox.Yes | QMessageBox.No
+                    )
+                    
+                    if confirm == QMessageBox.Yes:
+                        # 获取指定版本的文件内容
+                        file_content = self.gitManager.getFileContentAtCommit(relative_path, selected_commit['hash'])
                         
-                    # 标记为已修改，以便用户可以选择重新保存
-                    self.editor.document().setModified(True)
-                    
-                    InfoBar.success(
-                        title="回退成功",
-                        content=f"已成功回退到 {selected_commit['hash'][:7]} 的版本",
-                        orient=Qt.Horizontal,
-                        isClosable=True,
-                        position=InfoBarPosition.TOP,
-                        duration=2000,
-                        parent=self
-                    )
-                else:
-                    InfoBar.error(
-                        title="回退失败",
-                        content="回退到Git版本失败，请检查文件权限和状态",
-                        orient=Qt.Horizontal,
-                        isClosable=True,
-                        position=InfoBarPosition.TOP,
-                        duration=2000,
-                        parent=self
-                    )
-                    
+                        if file_content is None:
+                            QMessageBox.warning(self, "还原失败", f"无法获取提交 {selected_commit['hash'][:8]} 的文件内容")
+                            return
+                        
+                        # 确保文件内容是字符串
+                        if isinstance(file_content, bytes):
+                            try:
+                                # 尝试UTF-8解码
+                                file_content = file_content.decode('utf-8', errors='replace')
+                            except UnicodeDecodeError:
+                                # 如果失败，使用系统默认编码
+                                import locale
+                                file_content = file_content.decode(locale.getpreferredencoding(), errors='replace')
+                        
+                        # 更新编辑器内容
+                        self.editor.setPlainText(file_content)
+                        
+                        # 更新状态
+                        self.editor.editor.document().setModified(True)
+                        
+                        # 显示成功消息
+                        InfoBar.success(
+                            title="还原成功",
+                            content=f"文件已还原到提交 {selected_commit['hash'][:8]} 的版本。",
+                            orient=Qt.Horizontal,
+                            isClosable=True,
+                            position=InfoBarPosition.TOP,
+                            duration=3000,
+                            parent=self
+                        )
+            except Exception as e:
+                error(f"还原到Git版本时出错: {str(e)}")
+                QMessageBox.warning(self, "还原失败", f"操作过程中出错: {str(e)}")
         except Exception as e:
-            QMessageBox.critical(self, "回退失败", f"回退到Git版本失败: {str(e)}") 
+            error(f"执行Git还原操作时发生未处理异常: {str(e)}")
+            QMessageBox.critical(self, "系统错误", f"执行操作时发生未预期错误: {str(e)}")
 
     def checkAutoSaveRecovery(self):
         """ 检查是否有自动保存文件需要恢复 """
