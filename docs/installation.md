@@ -2,10 +2,20 @@
 
 ## 系统要求
 
-- Python 3.7+
+- Python 3.7+（使用py文件运行必选）
 - Git (已安装并配置)
 
+---
+
 ## 安装步骤
+
+##从已编译运行
+
+下载已发布的EXE文件
+
+运行！
+
+##从源码运行
 
 ### 1. 克隆仓库
 
@@ -69,3 +79,36 @@ git config --global user.email "your.email@example.com"
 git pull
 pip install -r requirements.txt
 ``` 
+
+##自行编译
+
+### 1. 克隆仓库
+
+```bash
+git clone https://github.com/yourusername/mgit.git
+cd mgit
+```
+
+### 2. 创建虚拟环境 (推荐)
+
+#### Windows:
+
+```cmd
+python -m venv venv
+venv\Scripts\activate
+```
+
+#### macOS/Linux:
+
+```bash
+python3 -m venv venv
+source venv/bin/activate
+```
+
+### 3. 安装依赖
+
+```bash
+pip install -r requirements.txt
+```
+
+### 4. 编辑psy
