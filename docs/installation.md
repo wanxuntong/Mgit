@@ -9,14 +9,14 @@
 
 
 ## 安装步骤
-    git[下载地址](https://git-scm.com/downloads/win)
+    git下载地址 (https://git-scm.com/downloads/win)
 
 ### 从已编译运行
 
 
 下载已发布的EXE文件
 
-运行！11111111
+运行！
 
 
 ### 从源码运行
