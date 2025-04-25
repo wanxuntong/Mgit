@@ -84,7 +84,7 @@ git pull
 pip install -r requirements.txt
 ``` 
 
-##自行编译
+## 自行编译
 
 ### 1. 克隆仓库
 
