@@ -11,7 +11,7 @@
 ## 安装步骤
 
 
-## 从已编译运行
+### 从已编译运行
 
 
 下载已发布的EXE文件
@@ -19,38 +19,38 @@
 运行！
 
 
-## 从源码运行
+### 从源码运行
 
-### 1. 克隆仓库
+#### 1. 克隆仓库
 
 ```bash
 git clone https://github.com/yourusername/mgit.git
 cd mgit
 ```
 
-### 2. 创建虚拟环境 (推荐)
+#### 2. 创建虚拟环境 (推荐)
 
-#### Windows:
+##### Windows:
 
 ```cmd
 python -m venv venv
 venv\Scripts\activate
 ```
 
-#### macOS/Linux:
+##### macOS/Linux:
 
 ```bash
 python3 -m venv venv
 source venv/bin/activate
 ```
 
-### 3. 安装依赖
+#### 3. 安装依赖
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### 4. 运行应用
+#### 4. 运行应用
 
 ```bash
 python run.py
